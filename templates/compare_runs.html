@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th, td { text-align: left; padding: .45rem .5rem; border-bottom: 1px solid var(--line); }
+  .delta-pos { color: var(--accent); }
+  .delta-neg { color: #a11; }
+  .summary-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 720px) { .summary-grid { grid-template-columns: 1fr; } }
+</style>
+
+<div class="card">
+  <h2 style="margin-top:0">Compare runs</h2>
+  <p class="small">Diff two analysis passes — score drift on overlapping photos (re-analyze dogfood).</p>
+  <form method="get" action="/ui/compare" class="toolbar">
+    <label>Run A
+      <select name="a" required>
+        <option value="">—</option>
+        {% for r in recent_runs %}
+        <option value="{{ r.id }}" {% if run_a == r.id %}selected{% endif %}>#{{ r.id }} — {{ r.source or '(upload)' }} ({{ r.photo_count or 0 }} photos)</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Run B
+      <select name="b" required>
+        <option value="">—</option>
+        {% for r in recent_runs %}
+        <option value="{{ r.id }}" {% if run_b == r.id %}selected{% endif %}>#{{ r.id }} — {{ r.source or '(upload)' }} ({{ r.photo_count or 0 }} photos)</option>
+        {% endfor %}
+      </select>
+    </label>
+    <div><button type="submit">Compare</button></div>
+  </form>
+  <p class="small"><a href="/">← home</a> · JSON: <code>/runs/compare?a=&amp;b=</code></p>
+</div>
+
+{% if compare_error %}
+<div class="card"><p class="status-err">{{ compare_error }}</p></div>
+{% endif %}
+
+{% if compare %}
+<div class="summary-grid">
+  <div class="card">
+    <h3 style="margin-top:0">Run A #{{ compare.a.run_id }}</h3>
+    <p class="small">{{ compare.a.model }} · {{ compare.a.photo_count }} photos</p>
+    <p>Avg keeper: <strong>{{ compare.a.avg_keeper_score if compare.a.avg_keeper_score is not none else '—' }}</strong></p>
+    <p>Avg hero: {{ compare.a.avg_hero_potential if compare.a.avg_hero_potential is not none else '—' }}</p>
+    <a href="/runs/{{ compare.a.run_id }}">Open run A</a>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">Run B #{{ compare.b.run_id }}</h3>
+    <p class="small">{{ compare.b.model }} · {{ compare.b.photo_count }} photos</p>
+    <p>Avg keeper: <strong>{{ compare.b.avg_keeper_score if compare.b.avg_keeper_score is not none else '—' }}</strong></p>
+    <p>Avg hero: {{ compare.b.avg_hero_potential if compare.b.avg_hero_potential is not none else '—' }}</p>
+    <a href="/runs/{{ compare.b.run_id }}">Open run B</a>
+  </div>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">Overlap</h3>
+  <p class="small">
+    {{ compare.common_paths }} common paths ·
+    {{ compare.only_in_a }} only in A ·
+    {{ compare.only_in_b }} only in B
+    {% if compare.avg_keeper_delta is not none %}
+    · avg keeper Δ <strong>{{ '%+.3f'|format(compare.avg_keeper_delta) }}</strong>
+    {% endif %}
+  </p>
+</div>
+
+{% if compare.score_changes %}
+<div class="card">
+  <h3 style="margin-top:0">Keeper score drift (top {{ compare.score_changes|length }})</h3>
+  <table>
+    <tr><th>Photo</th><th>A</th><th>B</th><th>Δ</th></tr>
+    {% for row in compare.score_changes %}
+    <tr>
+      <td>{{ row.basename or row.image_path }}</td>
+      <td>{{ '%.3f'|format(row.keeper_a) }}</td>
+      <td>{{ '%.3f'|format(row.keeper_b) }}</td>
+      <td class="{% if row.keeper_delta > 0 %}delta-pos{% elif row.keeper_delta < 0 %}delta-neg{% endif %}">
+        {{ '%+.3f'|format(row.keeper_delta) }}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

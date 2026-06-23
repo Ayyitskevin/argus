@@ -123,6 +123,21 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_log(tenant_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action, created_at);
+
+CREATE TABLE IF NOT EXISTS stripe_webhook_events (
+    event_id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    processed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS cap_alert_log (
+    tenant_id TEXT NOT NULL,
+    period TEXT NOT NULL,
+    alert_kind TEXT NOT NULL,
+    sent_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (tenant_id, period, alert_kind),
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+);
 """
 
 _SCHEMA_LOCK = threading.Lock()
@@ -1139,3 +1154,49 @@ def cleanup_audit_log(days: int | None = None) -> int:
     with tx() as con:
         cur = con.execute("DELETE FROM audit_log WHERE created_at < ?", (cutoff,))
         return cur.rowcount
+
+
+def ping() -> bool:
+    """Lightweight DB connectivity check for health probes."""
+    con = connect()
+    try:
+        row = con.execute("SELECT 1 AS ok").fetchone()
+        return bool(row and row["ok"] == 1)
+    finally:
+        close(con)
+
+
+def record_stripe_webhook_event(event_id: str, event_type: str) -> bool:
+    """Insert Stripe event id; return False if already processed."""
+    if not event_id:
+        return True
+    with tx() as con:
+        try:
+            con.execute(
+                "INSERT INTO stripe_webhook_events (event_id, event_type) VALUES (?, ?)",
+                (event_id, event_type),
+            )
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+
+def cap_alert_already_sent(tenant_id: str, period: str, alert_kind: str) -> bool:
+    con = connect()
+    try:
+        row = con.execute(
+            "SELECT 1 FROM cap_alert_log WHERE tenant_id=? AND period=? AND alert_kind=?",
+            (tenant_id, period, alert_kind),
+        ).fetchone()
+        return row is not None
+    finally:
+        close(con)
+
+
+def record_cap_alert(tenant_id: str, period: str, alert_kind: str) -> None:
+    with tx() as con:
+        con.execute(
+            """INSERT OR IGNORE INTO cap_alert_log (tenant_id, period, alert_kind)
+               VALUES (?, ?, ?)""",
+            (tenant_id, period, alert_kind),
+        )

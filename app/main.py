@@ -7,11 +7,13 @@ import json
 import logging
 import os
 import uuid
+from urllib.parse import quote_plus
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -28,7 +30,7 @@ from .jobs import JobWorker
 from .sidecars import write_sidecar
 from .vision import make_thumbnail
 from .vision_status import vision_status
-from . import audit, billing, rate_limit, saas, storage
+from . import audit, billing, cap_alerts, health, rate_limit, saas, storage, structured_log
 from .saas import assert_upload_only, get_full_run_for_ctx, get_job_for_ctx, tenant_scope
 
 logging.basicConfig(level=logging.INFO)
@@ -100,7 +102,24 @@ async def lifespan(app: FastAPI):
         worker.stop()
 
 
-app = FastAPI(title="argus / photometa", version="phase10", lifespan=lifespan)
+app = FastAPI(
+    title="argus / photometa",
+    version="phase11",
+    description=(
+        "Vision metadata and culling API for photography workflows. "
+        "SaaS tenants authenticate with `Authorization: Bearer argus_tk_<tenant>_<token>`. "
+        "Homelab admin uses `ARGUS_API_TOKEN`."
+    ),
+    lifespan=lifespan,
+)
+if config.CORS_ORIGINS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=config.CORS_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 app.middleware("http")(rate_limit.rate_limit_middleware)
 app.middleware("http")(saas.saas_auth_middleware)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -108,6 +127,17 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 def _request_auth(request: Request) -> AuthContext | None:
     return getattr(request.state, "auth", None)
+
+
+def _ui_saas_auth(request: Request) -> AuthContext | None:
+    """Resolve SaaS portal auth from middleware state or UI cookie."""
+    ctx = _request_auth(request)
+    if ctx is not None:
+        return ctx
+    try:
+        return resolve_auth(request)
+    except HTTPException:
+        return None
 
 
 def error(message: str, status_code: int) -> JSONResponse:
@@ -162,10 +192,12 @@ def _enqueue_folder_job(
     return JSONResponse(response)
 
 
-@app.get("/healthz")
-def healthz():
-    return {
-        "status": "ok",
+@app.get("/healthz", tags=["ops"])
+def healthz(request: Request):
+    worker = getattr(request.app.state, "job_worker", None)
+    report = health.build_health_report(worker=worker)
+    body = {
+        **report,
         "service_mode": config.SERVICE_MODE,
         "backend": config.VISION_BACKEND,
         "queue_enabled": config.QUEUE_ENABLED,
@@ -174,7 +206,6 @@ def healthz():
         "tailscale_hint": config.TAILSCALE_HINT,
         "auth_enabled": bool(config.API_TOKEN),
         "prometheus_enabled": config.PROMETHEUS_ENABLED,
-        "queue_depth": db.queue_depth() if config.QUEUE_ENABLED else 0,
         "model": config.VISION_MODEL,
         "grok_configured": bool(config.XAI_API_KEY),
         "vision_provider": "xai" if config.VISION_BACKEND == "grok" else config.VISION_BACKEND,
@@ -182,7 +213,11 @@ def healthz():
         "cloud_cost_cap_usd": config.CLOUD_COST_CAP_USD or None,
         "cloud_monthly_image_cap": config.CLOUD_MONTHLY_IMAGE_CAP or None,
         "tenant_count": len(db.list_tenants(active_only=True)) if config.SAAS_MODE else 0,
+        "redis_rate_limits": bool(config.REDIS_URL),
+        "cors_enabled": bool(config.CORS_ORIGINS),
     }
+    status_code = 503 if report["status"] == "error" else 200
+    return JSONResponse(body, status_code=status_code)
 
 
 @app.get("/vision/status", response_class=JSONResponse)
@@ -296,6 +331,15 @@ async def analyze_single(
         metrics.inc_tenant(ctx.tenant_id, "analyze_single")
         metrics.inc_tenant(ctx.tenant_id, "photos_analyzed")
         audit.record("analyze.single", request=request, ctx=ctx, status="ok", resource=str(image_path))
+        structured_log.event(
+            "analyze.single",
+            tenant_id=ctx.tenant_id,
+            run_id=out.get("run_id"),
+            model=out.get("model"),
+            path=str(image_path),
+        )
+        if ctx.tenant_id:
+            cap_alerts.maybe_notify(ctx.tenant_id)
         if write_sidecar:
             if tmp_path is None:
                 written = write_sidecar(str(image_path), out, sidecar_dir=sidecar_dir)
@@ -619,7 +663,49 @@ def _run_review_context(data: dict, **filters) -> dict:
     )
 
 
-@app.get("/runs/compare", response_class=JSONResponse)
+@app.get("/ui/compare", response_class=HTMLResponse, tags=["ui"])
+def ui_compare_runs(
+    request: Request,
+    a: Optional[int] = Query(None),
+    b: Optional[int] = Query(None),
+):
+    ctx = _request_auth(request)
+    recent = [
+        dict(row)
+        for row in db.list_recent_runs(limit=30, tenant_id=tenant_scope(ctx))
+    ]
+    compare_data = None
+    compare_error = None
+    if a is not None and b is not None:
+        scope = tenant_scope(ctx)
+        if scope and (
+            db.get_run(a, tenant_id=scope) is None or db.get_run(b, tenant_id=scope) is None
+        ):
+            compare_error = "One or both runs not found (or not owned by this tenant)."
+        else:
+            compare_data = service.compare_runs(a, b)
+            if compare_data is None:
+                compare_error = "One or both runs not found."
+    return templates.TemplateResponse(
+        request,
+        "compare_runs.html",
+        _ui_context(
+            title="Compare runs",
+            recent_runs=recent,
+            run_a=a,
+            run_b=b,
+            compare=compare_data,
+            compare_error=compare_error,
+        ),
+    )
+
+
+@app.get(
+    "/runs/compare",
+    response_class=JSONResponse,
+    tags=["runs"],
+    summary="Diff two runs by score drift on overlapping photos",
+)
 def compare_runs(
     request: Request,
     a: int = Query(..., description="first run id"),
@@ -998,14 +1084,26 @@ def saas_billing_status():
     return billing.billing_status()
 
 
-@app.get("/tenant/profile", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
+@app.get(
+    "/tenant/profile",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_bearer)],
+    tags=["tenant"],
+    summary="Tenant metadata for the authenticated API key",
+)
 def tenant_profile(ctx: AuthContext = Depends(require_bearer)):
     if not ctx.tenant:
         return error("tenant API key required", 403)
     return {"tenant": ctx.tenant}
 
 
-@app.get("/tenant/usage", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
+@app.get(
+    "/tenant/usage",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_bearer)],
+    tags=["tenant"],
+    summary="Current-period usage, caps, and soft cap warnings",
+)
 def tenant_usage(ctx: AuthContext = Depends(require_bearer)):
     if not ctx.tenant:
         return error("tenant API key required", 403)
@@ -1195,7 +1293,7 @@ def ui_saas_login_post(request: Request, api_token: str = Form(...)):
 
 @app.get("/ui/saas/app", response_class=HTMLResponse)
 def ui_saas_tenant_app(request: Request):
-    ctx = _request_auth(request)
+    ctx = _ui_saas_auth(request)
     if ctx is None or ctx.is_admin or not ctx.tenant:
         return RedirectResponse("/ui/saas/login", status_code=303)
     usage = metering.usage_snapshot(ctx.tenant_id)
@@ -1203,6 +1301,7 @@ def ui_saas_tenant_app(request: Request):
         dict(row)
         for row in db.list_recent_runs(limit=8, tenant_id=ctx.tenant_id)
     ]
+    tenant_jobs = [dict(row) for row in db.list_jobs(limit=10, tenant_id=ctx.tenant_id)]
     audit_events = db.list_audit_events(tenant_id=ctx.tenant_id, limit=15)
     return templates.TemplateResponse(
         request,
@@ -1212,21 +1311,59 @@ def ui_saas_tenant_app(request: Request):
             portal_mode="tenant",
             tenant=ctx.tenant,
             usage=usage,
+            cap_warnings=usage.get("warnings") or [],
             recent_runs=recent,
+            tenant_jobs=tenant_jobs,
             audit_events=audit_events,
             billing_enabled=billing.billing_enabled(),
         ),
     )
 
 
-@app.get("/ui/saas/app/admin", response_class=HTMLResponse)
-def ui_saas_admin_app(request: Request):
-    ctx = _request_auth(request)
+def _admin_ui_redirect(request: Request) -> AuthContext | RedirectResponse:
+    ctx = _ui_saas_auth(request)
     if ctx is None or not ctx.is_admin:
         return RedirectResponse("/ui/saas/login", status_code=303)
+    return ctx
+
+
+def _admin_tenant_context(
+    request: Request,
+    tenant_id: str,
+    *,
+    admin_message: str | None = None,
+    admin_error: str | None = None,
+    issued_api_key: str | None = None,
+) -> dict:
+    tenant = db.get_tenant(tenant_id)
+    if not tenant:
+        raise HTTPException(status_code=404, detail="tenant not found")
+    return _ui_context(
+        title=f"Tenant {tenant_id}",
+        tenant=tenant,
+        usage=metering.usage_snapshot(tenant_id),
+        keys=db.list_tenant_keys(tenant_id),
+        billing_enabled=billing.billing_enabled(),
+        admin_message=admin_message,
+        admin_error=admin_error,
+        issued_api_key=issued_api_key,
+    )
+
+
+@app.get("/ui/saas/app/admin", response_class=HTMLResponse)
+def ui_saas_admin_app(
+    request: Request,
+    created: Optional[str] = Query(None),
+    error: Optional[str] = Query(None),
+):
+    ctx = _admin_ui_redirect(request)
+    if not isinstance(ctx, AuthContext):
+        return ctx
     tenant_rows = db.list_tenants()
     global_usage = db.global_usage_totals()
     audit_events = db.list_audit_events(limit=25)
+    admin_message = f"Tenant {created} created." if created else None
+    admin_error = error
     return templates.TemplateResponse(
         request,
         "saas_dashboard.html",
@@ -1237,13 +1374,186 @@ def ui_saas_admin_app(request: Request):
             global_usage=global_usage,
             audit_events=audit_events,
             billing_enabled=billing.billing_enabled(),
+            admin_message=admin_message,
+            admin_error=admin_error,
         ),
     )
 
 
+@app.get("/ui/saas/app/admin/tenants/{tenant_id}", response_class=HTMLResponse)
+def ui_saas_admin_tenant(
+    request: Request,
+    tenant_id: str,
+    updated: Optional[str] = Query(None),
+    revoked: Optional[str] = Query(None),
+    error: Optional[str] = Query(None),
+):
+    ctx = _admin_ui_redirect(request)
+    if not isinstance(ctx, AuthContext):
+        return ctx
+    if not db.get_tenant(tenant_id):
+        return RedirectResponse("/ui/saas/app/admin?error=tenant+not+found", status_code=303)
+    admin_message = None
+    if updated:
+        admin_message = "Settings saved."
+    elif revoked:
+        admin_message = "API key revoked."
+    return templates.TemplateResponse(
+        request,
+        "saas_admin_tenant.html",
+        _admin_tenant_context(
+            request,
+            tenant_id,
+            admin_message=admin_message,
+            admin_error=error,
+        ),
+    )
+
+
+@app.post("/ui/saas/app/admin/tenants")
+def ui_saas_admin_create_tenant(
+    request: Request,
+    tenant_id: str = Form(...),
+    name: str = Form(...),
+    vision_provider: str = Form("grok"),
+    monthly_image_cap: Optional[str] = Form(None),
+    cost_cap_usd: Optional[str] = Form(None),
+):
+    ctx = _admin_ui_redirect(request)
+    if not isinstance(ctx, AuthContext):
+        return ctx
+    if not config.SAAS_MODE:
+        return RedirectResponse("/ui/saas/app/admin?error=SaaS+mode+disabled", status_code=303)
+    cap_images = int(monthly_image_cap) if monthly_image_cap and monthly_image_cap.strip() else None
+    cap_cost = float(cost_cap_usd) if cost_cap_usd and cost_cap_usd.strip() else None
+    try:
+        tenant = tenants.create_tenant(
+            tenant_id,
+            name=name,
+            vision_provider=vision_provider,
+            cost_cap_usd=cap_cost,
+            monthly_image_cap=cap_images,
+        )
+    except TenantError as exc:
+        audit.record("admin.tenant.create", request=request, ctx=ctx, status="error", detail=str(exc))
+        return RedirectResponse(
+            f"/ui/saas/app/admin?error={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    audit.record("admin.tenant.create", request=request, ctx=ctx, tenant_id=tenant["id"], resource=tenant["id"])
+    return RedirectResponse(f"/ui/saas/app/admin/tenants/{tenant['id']}", status_code=303)
+
+
+@app.post("/ui/saas/app/admin/tenants/{tenant_id}")
+def ui_saas_admin_patch_tenant(
+    request: Request,
+    tenant_id: str,
+    name: Optional[str] = Form(None),
+    active: str = Form("1"),
+    vision_provider: Optional[str] = Form(None),
+    monthly_image_cap: Optional[str] = Form(None),
+    cost_cap_usd: Optional[str] = Form(None),
+):
+    ctx = _admin_ui_redirect(request)
+    if not isinstance(ctx, AuthContext):
+        return ctx
+    if not config.SAAS_MODE or not db.get_tenant(tenant_id):
+        return RedirectResponse("/ui/saas/app/admin?error=tenant+not+found", status_code=303)
+    fields: dict = {"active": active.strip() in {"1", "true", "yes", "on"}}
+    if name is not None and name.strip():
+        fields["name"] = name.strip()
+    if vision_provider and vision_provider.strip():
+        fields["vision_provider"] = vision_provider.strip()
+    if monthly_image_cap is not None:
+        stripped = monthly_image_cap.strip()
+        fields["monthly_image_cap"] = int(stripped) if stripped else None
+    if cost_cap_usd is not None:
+        stripped = cost_cap_usd.strip()
+        fields["cost_cap_usd"] = float(stripped) if stripped else None
+    db.update_tenant(tenant_id, **fields)
+    audit.record("admin.tenant.patch", request=request, ctx=ctx, tenant_id=tenant_id, detail=fields)
+    return RedirectResponse(f"/ui/saas/app/admin/tenants/{tenant_id}?updated=1", status_code=303)
+
+
+@app.post("/ui/saas/app/admin/tenants/{tenant_id}/keys")
+def ui_saas_admin_issue_key(
+    request: Request,
+    tenant_id: str,
+    label: Optional[str] = Form(None),
+):
+    ctx = _admin_ui_redirect(request)
+    if not isinstance(ctx, AuthContext):
+        return ctx
+    if not config.SAAS_MODE or not db.get_tenant(tenant_id):
+        return RedirectResponse("/ui/saas/app/admin?error=tenant+not+found", status_code=303)
+    try:
+        issued = tenants.issue_api_key(tenant_id, label=label.strip() if label else None)
+    except TenantError as exc:
+        return templates.TemplateResponse(
+            request,
+            "saas_admin_tenant.html",
+            _admin_tenant_context(request, tenant_id, admin_error=str(exc)),
+            status_code=400,
+        )
+    audit.record(
+        "admin.tenant.key.issue",
+        request=request,
+        ctx=ctx,
+        tenant_id=tenant_id,
+        resource=issued["key_id"],
+    )
+    return templates.TemplateResponse(
+        request,
+        "saas_admin_tenant.html",
+        _admin_tenant_context(request, tenant_id, issued_api_key=issued["api_key"]),
+    )
+
+
+@app.post("/ui/saas/app/admin/tenants/{tenant_id}/keys/{key_id}/revoke")
+def ui_saas_admin_revoke_key(request: Request, tenant_id: str, key_id: str):
+    ctx = _admin_ui_redirect(request)
+    if not isinstance(ctx, AuthContext):
+        return ctx
+    if not config.SAAS_MODE or not db.get_tenant(tenant_id):
+        return RedirectResponse("/ui/saas/app/admin?error=tenant+not+found", status_code=303)
+    keys = {row["id"] for row in db.list_tenant_keys(tenant_id)}
+    if key_id not in keys:
+        return RedirectResponse(
+            f"/ui/saas/app/admin/tenants/{tenant_id}?error=key+not+found",
+            status_code=303,
+        )
+    if not tenants.revoke_key(key_id):
+        return RedirectResponse(
+            f"/ui/saas/app/admin/tenants/{tenant_id}?error=key+already+revoked",
+            status_code=303,
+        )
+    audit.record("admin.tenant.key.revoke", request=request, ctx=ctx, tenant_id=tenant_id, resource=key_id)
+    return RedirectResponse(f"/ui/saas/app/admin/tenants/{tenant_id}?revoked=1", status_code=303)
+
+
+@app.post("/ui/saas/app/admin/tenants/{tenant_id}/billing/checkout")
+def ui_saas_admin_billing_checkout(request: Request, tenant_id: str):
+    ctx = _admin_ui_redirect(request)
+    if not isinstance(ctx, AuthContext):
+        return ctx
+    if not config.SAAS_MODE or not db.get_tenant(tenant_id):
+        return RedirectResponse("/ui/saas/app/admin?error=tenant+not+found", status_code=303)
+    try:
+        session = billing.create_checkout_session(tenant_id)
+    except billing.BillingError as exc:
+        return templates.TemplateResponse(
+            request,
+            "saas_admin_tenant.html",
+            _admin_tenant_context(request, tenant_id, admin_error=str(exc)),
+            status_code=400,
+        )
+    audit.record("billing.checkout", request=request, ctx=ctx, tenant_id=tenant_id, detail=session)
+    return RedirectResponse(session["checkout_url"], status_code=303)
+
+
 @app.get("/ui/saas/billing", response_class=HTMLResponse)
 def ui_saas_billing(request: Request, success: Optional[str] = Query(None), cancelled: Optional[str] = Query(None)):
-    ctx = _request_auth(request)
+    ctx = _ui_saas_auth(request)
     if ctx is None:
         return RedirectResponse("/ui/saas/login", status_code=303)
     tenant = ctx.tenant if ctx.tenant else None
@@ -1327,6 +1637,14 @@ async def ui_saas_analyze(
         )
     metrics.inc_tenant(ctx.tenant_id, "analyze_single")
     audit.record("analyze.single", request=request, ctx=ctx, resource=str(image_path), detail={"run_id": out["run_id"]})
+    structured_log.event(
+        "analyze.single",
+        tenant_id=ctx.tenant_id,
+        run_id=out["run_id"],
+        path=str(image_path),
+        source="ui",
+    )
+    cap_alerts.maybe_notify(ctx.tenant_id)
     return RedirectResponse(f"/runs/{out['run_id']}", status_code=303)
 
 

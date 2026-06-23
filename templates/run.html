@@ -7,7 +7,7 @@
     {{ run.source }} · {{ run.model }} · {{ all_photos|length }} photos
     {% if client_id %} · client <strong>{{ client_id }}</strong>{% endif %}
   </div>
-  <div class="nav"><a href="/">← new analysis</a> · <a href="/runs/{{ run.id }}/export.csv">CSV</a> · <a href="/runs/{{ run.id }}/export">JSON</a></div>
+  <div class="nav"><a href="/">← new analysis</a> · <a href="/ui/compare?a={{ run.id }}">Compare</a> · <a href="/runs/{{ run.id }}/export.csv">CSV</a> · <a href="/runs/{{ run.id }}/export">JSON</a></div>
 </div>
 
 {% if heroes %}

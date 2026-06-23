@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th, td { text-align: left; padding: .45rem .5rem; border-bottom: 1px solid var(--line); }
+  .stat { font-size: 1.2rem; font-weight: 700; color: var(--accent); }
+  .key-banner {
+    background: #fff8e6; border: 1px solid #e8c96a; border-radius: 8px; padding: .75rem 1rem; margin-bottom: 1rem;
+  }
+  .key-banner code { word-break: break-all; font-size: .82rem; }
+  .inline-form { display: inline; }
+</style>
+
+<div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:.75rem">
+    <h2 style="margin:0"><code>{{ tenant.id }}</code> — {{ tenant.name }}</h2>
+    <div>
+      <a class="btn secondary" href="/ui/saas/app/admin">← All tenants</a>
+      <form method="post" action="/ui/logout" style="display:inline"><button type="submit" class="secondary">Logout</button></form>
+    </div>
+  </div>
+</div>
+
+{% if admin_message %}
+<p class="status-ok">{{ admin_message }}</p>
+{% endif %}
+{% if admin_error %}
+<p class="status-err">{{ admin_error }}</p>
+{% endif %}
+{% if issued_api_key %}
+<div class="key-banner">
+  <p style="margin:0 0 .5rem"><strong>New API key — copy now</strong> (shown once, not stored in plaintext)</p>
+  <code>{{ issued_api_key }}</code>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3 style="margin-top:0">Usage this month</h3>
+  <div class="stat">{{ usage.tenant.images_analyzed }} images</div>
+  <p class="small">${{ "%.4f"|format(usage.tenant.cost_usd) }} estimated</p>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">Settings</h3>
+  <form method="post" action="/ui/saas/app/admin/tenants/{{ tenant.id }}" class="toolbar">
+    <label>Name
+      <input type="text" name="name" value="{{ tenant.name }}" required>
+    </label>
+    <label>Provider
+      <select name="vision_provider">
+        {% for p in ['grok', 'openai', 'anthropic'] %}
+        <option value="{{ p }}" {% if tenant.vision_provider == p %}selected{% endif %}>{{ p }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Monthly image cap
+      <input type="number" name="monthly_image_cap" min="0" step="1" placeholder="∞"
+             value="{{ tenant.monthly_image_cap if tenant.monthly_image_cap is not none else '' }}">
+    </label>
+    <label>Cost cap (USD)
+      <input type="number" name="cost_cap_usd" min="0" step="0.01" placeholder="none"
+             value="{{ tenant.cost_cap_usd if tenant.cost_cap_usd is not none else '' }}">
+    </label>
+    <label>Active
+      <select name="active">
+        <option value="1" {% if tenant.active %}selected{% endif %}>yes</option>
+        <option value="0" {% if not tenant.active %}selected{% endif %}>no</option>
+      </select>
+    </label>
+    <div><button type="submit">Save settings</button></div>
+  </form>
+  <p class="small">Plan: {{ tenant.plan_tier or 'trial' }} · Billing: {{ tenant.billing_status or 'not linked' }}</p>
+  {% if billing_enabled %}
+  <form method="post" action="/ui/saas/app/admin/tenants/{{ tenant.id }}/billing/checkout" style="margin-top:.75rem">
+    <button type="submit" class="secondary">Open Stripe checkout for tenant</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">API keys</h3>
+  <form method="post" action="/ui/saas/app/admin/tenants/{{ tenant.id }}/keys" class="toolbar" style="margin-bottom:1rem">
+    <label>Label (optional)
+      <input type="text" name="label" placeholder="e.g. production">
+    </label>
+    <div><button type="submit">Issue new key</button></div>
+  </form>
+  {% if keys %}
+  <table>
+    <tr><th>ID</th><th>Label</th><th>Prefix</th><th>Created</th><th>Status</th><th></th></tr>
+    {% for k in keys %}
+    <tr>
+      <td class="small"><code>{{ k.id[:8] }}…</code></td>
+      <td>{{ k.label or '—' }}</td>
+      <td class="small"><code>{{ k.key_prefix }}…</code></td>
+      <td class="small">{{ k.created_at }}</td>
+      <td>{% if k.revoked_at %}revoked{% else %}active{% endif %}</td>
+      <td>
+        {% if not k.revoked_at %}
+        <form class="inline-form" method="post" action="/ui/saas/app/admin/tenants/{{ tenant.id }}/keys/{{ k.id }}/revoke">
+          <button type="submit" class="secondary" onclick="return confirm('Revoke this key?')">Revoke</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="small">No keys yet — issue one above.</p>
+  {% endif %}
+</div>
+{% endblock %}

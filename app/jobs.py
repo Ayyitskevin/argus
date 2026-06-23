@@ -122,6 +122,9 @@ class JobWorker:
             self._thread.join(timeout=2)
             self._thread = None
 
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
     def _loop(self) -> None:
         while not self._stop.is_set():
             self._cleanup_ticks += 1

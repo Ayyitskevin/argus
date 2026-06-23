@@ -149,7 +149,12 @@ def verify_webhook_signature(payload: bytes, sig_header: str | None) -> bool:
 
 
 def handle_webhook_event(event: dict[str, Any]) -> None:
-    etype = event.get("type")
+    etype = event.get("type") or "unknown"
+    event_id = event.get("id")
+    if event_id and not db.record_stripe_webhook_event(event_id, etype):
+        log.info("skipping duplicate stripe event %s (%s)", event_id, etype)
+        return
+
     obj = (event.get("data") or {}).get("object") or {}
     tenant_id = (obj.get("metadata") or {}).get("tenant_id")
 

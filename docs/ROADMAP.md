@@ -1,8 +1,8 @@
 # Argus Roadmap — Phases 5+
 
-> **As of:** 2026-06-23 · Branch `claude/phase0-make-it-run` @ `1f0d8b1`
-> Phases 0–4 are complete (mock-safe fleet integration). This doc is the gameplan
-> for everything still worth building.
+> **As of:** 2026-06-23 · `main` @ Phase 11 (SaaS portal, admin CRUD, ops batch)
+> Phases 0–11 are shipped in code; homelab runs mock on :8010, SaaS on :8020.
+> This doc tracks what remains for production hardening and fleet depth.
 
 ## North star
 
@@ -67,7 +67,9 @@ auth, in-process metrics, CSV export, Tailscale client.
 | **7** | Review UI + feedback loop | Phase 5 | 2 sessions |
 | **8** | DAM / plugin surfaces | Phase 6–7 | 2–3 sessions |
 | **9** | Fleet ops hardening | Phase 5 deploy | 1–2 sessions |
-| **10** | SaaS / cloud vision | product decision | later |
+| **10** | SaaS / cloud vision | product decision | **done** |
+| **11** | SaaS ops + portal | Phase 10 | **done** |
+| **12** | Postgres + horizontal scale | Phase 11 | later |
 
 Phases 6 and 7 can run in parallel after Phase 5 gates.
 
@@ -280,9 +282,16 @@ curl -s -H "Authorization: Bearer $ARGUS_API_TOKEN" \
 
 ## Suggested next session
 
-**Start Phase 5 slice 1:** merge branch, fix systemd unit, deploy mock on mickey,
-healthz + tailnet smoke. Schedule Phase 5 slice 2 (real vision dogfood) when
-Kevin has a representative F&B folder path and 30 minutes to judge outputs.
+**Shipped in Phase 11 batch:** compare-runs UI, tenant job panel, cap warnings,
+dependency-aware `/healthz`, structured logs, Stripe webhook idempotency, optional
+Redis rate limits, CORS + OpenAPI polish, admin portal CRUD.
+
+**Next priorities:**
+1. Land `.github/workflows/ci.yml` on GitHub (`workflow` OAuth scope).
+2. Live Stripe checkout dogfood (test mode) on `:8020`.
+3. Postgres adapter when multi-tenant SLA matters.
+4. Real Grok vision dogfood when xAI credits available.
+5. Phase 5–8 fleet depth (mise hooks, DAM plugins) as homelab needs arise.
 
 ---
 

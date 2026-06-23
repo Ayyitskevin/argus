@@ -90,12 +90,19 @@ def record_usage(
 
 def usage_snapshot(tenant_id: str | None = None) -> dict:
     period_usage = db.get_tenant_usage(tenant_id) if tenant_id else None
+    warnings: list[dict] = []
+    if tenant_id and config.SAAS_MODE:
+        from . import cap_alerts
+
+        warnings = cap_alerts.tenant_cap_warnings(tenant_id)
     return {
         "saas_mode": config.SAAS_MODE,
         "cloud_backend": config.CLOUD_BACKEND,
         "period": db._usage_period(),
         "global": db.global_usage_totals(),
         "tenant": period_usage,
+        "warnings": warnings,
+        "cap_warning_threshold_pct": round(config.CAP_WARNING_THRESHOLD * 100, 1),
         "caps": {
             "global_cost_usd": config.CLOUD_COST_CAP_USD or None,
             "global_monthly_images": config.CLOUD_MONTHLY_IMAGE_CAP or None,

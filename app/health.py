@@ -1,0 +1,83 @@
+"""Dependency checks for /healthz."""
+from __future__ import annotations
+
+from typing import Any
+
+from . import billing, config, db
+
+
+def _check_database() -> dict[str, str]:
+    try:
+        if db.ping():
+            return {"status": "ok"}
+        return {"status": "error", "detail": "ping failed"}
+    except Exception as exc:
+        return {"status": "error", "detail": str(exc)}
+
+
+def _check_queue(worker: Any | None) -> dict[str, str]:
+    if not config.QUEUE_ENABLED:
+        return {"status": "disabled"}
+    running = bool(worker and getattr(worker, "is_running", lambda: False)())
+    depth = db.queue_depth()
+    status = "ok" if running else "degraded"
+    return {"status": status, "depth": depth, "worker_running": running}
+
+
+def _check_vision() -> dict[str, str | bool]:
+    backend = config.VISION_BACKEND
+    if backend == "mock":
+        return {"status": "ok", "backend": backend, "configured": True}
+    if backend == "grok":
+        configured = bool(config.XAI_API_KEY)
+        return {
+            "status": "ok" if configured else "degraded",
+            "backend": backend,
+            "configured": configured,
+        }
+    return {"status": "ok", "backend": backend, "configured": True}
+
+
+def _check_billing() -> dict[str, str | bool]:
+    if not config.SAAS_MODE:
+        return {"status": "disabled"}
+    enabled = billing.billing_enabled()
+    return {
+        "status": "ok" if enabled else "disabled",
+        "configured": enabled,
+        "webhook": bool(config.STRIPE_WEBHOOK_SECRET),
+    }
+
+
+def _check_storage() -> dict[str, str | bool]:
+    if config.STORAGE_BACKEND == "s3":
+        ready = bool(config.S3_BUCKET and config.S3_ACCESS_KEY and config.S3_SECRET_KEY)
+        return {"status": "ok" if ready else "degraded", "backend": "s3", "configured": ready}
+    return {"status": "ok", "backend": "local", "configured": True}
+
+
+def build_health_report(*, worker: Any | None = None) -> dict:
+    checks = {
+        "database": _check_database(),
+        "queue": _check_queue(worker),
+        "vision": _check_vision(),
+        "storage": _check_storage(),
+    }
+    if config.SAAS_MODE:
+        checks["billing"] = _check_billing()
+
+    critical = [checks["database"]["status"]]
+    if config.QUEUE_ENABLED:
+        critical.append(checks["queue"]["status"])
+    if config.VISION_BACKEND == "grok" and not config.XAI_API_KEY:
+        # Degraded vision is acceptable for mock/dev; grok without key is degraded overall.
+        pass
+
+    if "error" in critical:
+        overall = "error"
+    elif any(item.get("status") == "degraded" for item in checks.values()):
+        overall = "degraded"
+    else:
+        overall = "ok"
+
+    return {"status": overall, "checks": checks}

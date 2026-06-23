@@ -81,6 +81,17 @@ S3_PREFIX = os.environ.get("ARGUS_S3_PREFIX", "argus/tenants")
 RATE_LIMIT_ENABLED = os.environ.get("ARGUS_RATE_LIMIT_ENABLED", "true").lower() == "true"
 RATE_LIMIT_PER_MINUTE = int(os.environ.get("ARGUS_RATE_LIMIT_PER_MINUTE", "60"))
 RATE_LIMIT_ANALYZE_PER_MINUTE = int(os.environ.get("ARGUS_RATE_LIMIT_ANALYZE_PER_MINUTE", "20"))
+REDIS_URL = os.environ.get("ARGUS_REDIS_URL") or None
+
+CORS_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("ARGUS_CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
+CAP_WARNING_THRESHOLD = float(os.environ.get("ARGUS_CAP_WARNING_THRESHOLD", "0.8"))
+CAP_WEBHOOK_URL = os.environ.get("ARGUS_CAP_WEBHOOK_URL") or None
+STRUCTURED_LOGS = os.environ.get("ARGUS_STRUCTURED_LOGS", "true").lower() == "true"
 
 AUDIT_LOG_ENABLED = os.environ.get("ARGUS_AUDIT_LOG_ENABLED", "true").lower() == "true"
 AUDIT_LOG_RETENTION_DAYS = int(os.environ.get("ARGUS_AUDIT_LOG_RETENTION_DAYS", "90"))

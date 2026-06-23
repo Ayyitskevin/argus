@@ -6,6 +6,7 @@
   table { width: 100%; border-collapse: collapse; font-size: .85rem; }
   th, td { text-align: left; padding: .45rem .5rem; border-bottom: 1px solid var(--line); }
   .stat { font-size: 1.4rem; font-weight: 700; color: var(--accent); }
+  .warn-banner { background: #fff8e6; border: 1px solid #e8c96a; border-radius: 8px; padding: .6rem .85rem; margin-bottom: 1rem; }
 </style>
 
 <div class="card">
@@ -25,6 +26,16 @@
 </div>
 
 {% if portal_mode == 'tenant' %}
+{% if cap_warnings %}
+<div class="warn-banner">
+  <strong>Approaching usage cap</strong>
+  <ul style="margin:.35rem 0 0; padding-left:1.1rem">
+    {% for w in cap_warnings %}
+    <li class="small">{{ w.message }} ({{ w.pct }}%)</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
 <div class="dash-grid">
   <div class="card">
     <h3 style="margin-top:0">Usage this month</h3>
@@ -63,6 +74,25 @@
   <p class="small">No runs yet — upload a photo above.</p>
   {% endif %}
 </div>
+
+<div class="card">
+  <h3 style="margin-top:0">Jobs</h3>
+  {% if tenant_jobs %}
+  <table>
+    <tr><th>Status</th><th>Folder</th><th>Created</th><th></th></tr>
+    {% for j in tenant_jobs %}
+    <tr>
+      <td><span class="badge">{{ j.status }}</span></td>
+      <td class="small" style="word-break:break-all">{{ j.folder or '—' }}</td>
+      <td class="small">{{ j.created_at }}</td>
+      <td>{% if j.status == 'done' and j.run_id %}<a href="/runs/{{ j.run_id }}">run</a>{% else %}<a href="/ui/jobs/{{ j.id }}">view</a>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="small">No queued jobs — folder analyzes appear here when <code>ARGUS_QUEUE_ENABLED=true</code>.</p>
+  {% endif %}
+</div>
 {% else %}
 <div class="dash-grid">
   <div class="card">
@@ -73,21 +103,56 @@
   <div class="card">
     <h3 style="margin-top:0">Tenants</h3>
     <div class="stat">{{ tenants|length }}</div>
-    <p class="small">Use <code>scripts/tenant_admin.py</code> or POST <code>/admin/tenants</code></p>
+    <p class="small">Create tenants and manage keys from this console.</p>
   </div>
+</div>
+
+{% if admin_message %}
+<p class="status-ok">{{ admin_message }}</p>
+{% endif %}
+{% if admin_error %}
+<p class="status-err">{{ admin_error }}</p>
+{% endif %}
+
+<div class="card">
+  <h3 style="margin-top:0">Create tenant</h3>
+  <form method="post" action="/ui/saas/app/admin/tenants" class="toolbar">
+    <label>ID
+      <input type="text" name="tenant_id" required pattern="[a-zA-Z0-9-]+" placeholder="acme-corp">
+    </label>
+    <label>Name
+      <input type="text" name="name" required placeholder="Acme Corp">
+    </label>
+    <label>Provider
+      <select name="vision_provider">
+        <option value="grok">grok</option>
+        <option value="openai">openai</option>
+        <option value="anthropic">anthropic</option>
+      </select>
+    </label>
+    <label>Monthly image cap
+      <input type="number" name="monthly_image_cap" min="0" step="1" placeholder="default">
+    </label>
+    <label>Cost cap (USD)
+      <input type="number" name="cost_cap_usd" min="0" step="0.01" placeholder="default">
+    </label>
+    <div><button type="submit">Create tenant</button></div>
+  </form>
+  <p class="small">IDs are lowercased; underscores are not allowed (reserved for API key format).</p>
 </div>
 
 <div class="card">
   <h3 style="margin-top:0">Tenants</h3>
   <table>
-    <tr><th>ID</th><th>Name</th><th>Active</th><th>Images/mo cap</th><th>Billing</th></tr>
+    <tr><th>ID</th><th>Name</th><th>Active</th><th>Images/mo cap</th><th>Billing</th><th></th></tr>
     {% for t in tenants %}
     <tr>
       <td><code>{{ t.id }}</code></td>
       <td>{{ t.name }}</td>
       <td>{{ 'yes' if t.active else 'no' }}</td>
-      <td>{{ t.monthly_image_cap or '—' }}</td>
+      <td>{{ t.monthly_image_cap if t.monthly_image_cap is not none else '—' }}</td>
       <td>{{ t.billing_status or '—' }}</td>
+      <td><a class="btn secondary" href="/ui/saas/app/admin/tenants/{{ t.id }}">Manage</a></td>
     </tr>
     {% endfor %}
   </table>
