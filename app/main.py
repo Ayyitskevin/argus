@@ -138,7 +138,10 @@ def _process_job(job_id: str):
 
 def _process_job_impl(job_id: str):
     job = db.get_job(job_id)
-    if not job or job["status"] != "queued":
+    # The worker claims a job by flipping it to "running" under its lock before
+    # spawning this thread, so accept either state — rejecting "running" here is
+    # what stalled every queued job. Anything already done/failed is a no-op.
+    if not job or job["status"] not in ("queued", "running"):
         return
     db.update_job(job_id, status="running")
     try:
@@ -228,6 +231,8 @@ TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+# StaticFiles raises at mount if the dir is missing, which crashed startup.
+STATIC_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -429,7 +434,7 @@ def analyze_folder_endpoint(
     model = model or config.VISION_MODEL
     run_id = db.create_run(source=source, model=model, project_id=project_id)
 
-    analyses = vision.analyze_folder(p, model=model, limit=limit, client_id=client_id, prefs=prefs)
+    analyses = vision.analyze_folder(p, model=model, limit=limit, prefs=prefs)
 
     sidecars_written = []
     for a in analyses:

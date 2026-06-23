@@ -1,4 +1,4 @@
-""Argus / photometa configuration — local-first, env driven.
+"""Argus / photometa configuration — local-first, env driven.
 
 Phase 2: service-ized, queueable, Tailscale-friendly.
 """

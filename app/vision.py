@@ -5,6 +5,7 @@ photography-specific output via forced JSON.
 """
 
 import base64
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -79,6 +80,22 @@ Return **only** a single valid JSON object with exactly these keys:
 Focus especially on what would help an album designer (mnemosyne) decide sequencing and hero selection. Be brutally honest on technical issues. Use F&B-specific language.
 """
 
+def make_thumbnail(path: str | Path, max_side: int = 512) -> bytes:
+    """Return JPEG bytes of a downscaled thumbnail (orientation-corrected).
+
+    Used by the /thumb endpoint to preview stored analyses without serving
+    full-resolution originals."""
+    import io
+    with Image.open(Path(path)) as im:
+        im = ImageOps.exif_transpose(im)
+        if im.mode != "RGB":
+            im = im.convert("RGB")
+        im.thumbnail((max_side, max_side))
+        buf = io.BytesIO()
+        im.save(buf, format="JPEG", quality=85)
+        return buf.getvalue()
+
+
 def _prepare_image(path: str | Path) -> tuple[bytes, tuple[int, int]]:
     """Open, transpose orientation, convert, return bytes + (w, h)."""
     import io
@@ -93,10 +110,77 @@ def _prepare_image(path: str | Path) -> tuple[bytes, tuple[int, int]]:
         return buf.getvalue(), (w, h)
 
 
-def analyze_image(image_path: str | Path, model: str | None = None) -> AnalysisResult:
-    """Run vision analysis on a single local image path. Returns typed AnalysisResult."""
+def _apply_prefs(result: AnalysisResult, prefs: dict | None) -> AnalysisResult:
+    """Nudge a result by learned preferences (Phase 3). Minimal but real: a
+    culling_bias shifts keeper/hero scores (clamped 0..1) and keyword_boosts are
+    prepended ahead of the model's own tags. No prefs -> result unchanged."""
+    if not prefs:
+        return result
+    bias = float(prefs.get("culling_bias", 0.0) or 0.0)
+    if bias:
+        result.culling.keeper_score = max(0.0, min(1.0, result.culling.keeper_score + bias))
+        result.culling.hero_potential = max(0.0, min(1.0, result.culling.hero_potential + bias))
+    boosts = [str(b).strip() for b in (prefs.get("keyword_boosts") or []) if str(b).strip()]
+    if boosts:
+        existing = set(result.keywords)
+        result.keywords = (
+            [b for b in boosts if b not in existing] + result.keywords
+        )[: config.DEFAULT_MAX_TAGS]
+    return result
+
+
+def _mock_result(
+    image_path: str | Path, width: int | None, height: int | None, model: str
+) -> AnalysisResult:
+    """Synthetic analysis for VISION_BACKEND=mock — no model call. Deterministic
+    (seeded by filename, so re-runs are stable) and shaped exactly like a real
+    result, so every downstream path (DB, sidecars, exports, mnemosyne) can be
+    exercised on a headless box or in CI without Ollama."""
+    name = Path(image_path).stem
+    seed = int(hashlib.md5(name.encode("utf-8")).hexdigest(), 16) % 100 / 100.0
+    landscape = (width or 1) >= (height or 1)
+    keeper = round(0.5 + 0.4 * seed, 2)
+    return AnalysisResult(
+        image_path=str(image_path),
+        width=width,
+        height=height,
+        shot_type="hero_plate" if landscape else "portrait_subject",
+        keywords=["mock", "f&b", "landscape" if landscape else "portrait", name],
+        culling=Culling(
+            keeper_score=keeper,
+            hero_potential=round(keeper * 0.9, 2),
+            technical_quality="good",
+            notes="Mock analysis (ARGUS_VISION_BACKEND=mock); no vision model was called.",
+        ),
+        alt_text=f"Mock alt text for {name}.",
+        description=f"Mock description for {name} ({width}x{height}).",
+        suggested_iptc={
+            "headline": name,
+            "caption": f"Mock caption for {name}.",
+            "keywords": ["mock", "f&b"],
+        },
+        raw_response="",
+        model=f"mock:{model}",
+    )
+
+
+def analyze_image(
+    image_path: str | Path,
+    model: str | None = None,
+    prefs: dict | None = None,
+) -> AnalysisResult:
+    """Run vision analysis on a single local image path. Returns typed AnalysisResult.
+
+    Honors config.VISION_BACKEND: "mock" (the safe default) returns synthetic
+    output without calling Ollama, so the service boots and tests run on a
+    headless box; "real" calls the configured vision model. Optional learned
+    `prefs` nudge the result in either mode."""
     model = model or config.VISION_MODEL
     img_bytes, (width, height) = _prepare_image(image_path)
+
+    if config.VISION_BACKEND == "mock":
+        return _apply_prefs(_mock_result(image_path, width, height, model), prefs)
+
     b64 = base64.b64encode(img_bytes).decode("utf-8")
 
     user_prompt = USER_PROMPT_TEMPLATE.format(max_tags=config.DEFAULT_MAX_TAGS)
@@ -152,7 +236,7 @@ def analyze_image(image_path: str | Path, model: str | None = None) -> AnalysisR
         )
 
         log.info("analyzed %s | model=%s | tags=%d | score=%.2f", image_path, model, len(keywords), result.culling.keeper_score)
-        return result
+        return _apply_prefs(result, prefs)
 
     except Exception as e:
         log.exception("vision analysis failed for %s", image_path)
@@ -172,7 +256,12 @@ def analyze_image(image_path: str | Path, model: str | None = None) -> AnalysisR
         )
 
 
-def analyze_folder(folder: str | Path, model: str | None = None, limit: int | None = None) -> list[AnalysisResult]:
+def analyze_folder(
+    folder: str | Path,
+    model: str | None = None,
+    limit: int | None = None,
+    prefs: dict | None = None,
+) -> list[AnalysisResult]:
     """Analyze all supported images in a folder (non-recursive for Phase 0). Returns typed results."""
     model = model or config.VISION_MODEL
     p = Path(folder)
@@ -186,7 +275,7 @@ def analyze_folder(folder: str | Path, model: str | None = None, limit: int | No
     results = []
     for img in images:
         try:
-            res = analyze_image(img, model=model)
+            res = analyze_image(img, model=model, prefs=prefs)
             results.append(res)
         except Exception as e:
             log.error("skipping %s: %s", img, e)

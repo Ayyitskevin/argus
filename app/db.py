@@ -1,4 +1,4 @@
-""Minimal SQLite layer for argus Phase 0 (local dogfood).
+"""Minimal SQLite layer for argus Phase 0 (local dogfood).
 
 Follows the short-connection + WAL spirit of mise without the full migration
 machinery yet. Tables are created on first use.
@@ -134,8 +134,7 @@ def save_photo_analysis(run_id: int, data: dict) -> int:
             """INSERT INTO photo_analyses
                (run_id, image_path, width, height, shot_type, keywords, culling,
                 alt_text, description, suggested_iptc, raw_response)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""
-            ,
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 run_id,
                 data["image_path"],
@@ -224,8 +223,7 @@ def create_job(folder: str, limit: int = 20, write_sidecars: bool = False, sidec
     with tx() as con:
         con.execute(
             """INSERT INTO jobs (id, status, folder, limit_, write_sidecars, sidecar_dir, project_id)
-               VALUES (?, 'queued', ?, ?, ?, ?, ?)""
-            ,
+               VALUES (?, 'queued', ?, ?, ?, ?, ?)""",
             (job_id, folder, limit, int(write_sidecars), sidecar_dir, project_id),
         )
     return job_id

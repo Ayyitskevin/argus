@@ -280,7 +280,7 @@ class ArgusClient:
             sidecar.write_text(json.dumps(photo, indent=2, ensure_ascii=False))
             written.append(str(sidecar))
             # iptc if present
-            if photo.get("suggested_iptc")):
+            if photo.get("suggested_iptc"):
                 iptc_sc = target / f"{basename}.iptc.json"
                 iptc_sc.write_text(json.dumps(photo["suggested_iptc"], indent=2, ensure_ascii=False))
                 written.append(str(iptc_sc))

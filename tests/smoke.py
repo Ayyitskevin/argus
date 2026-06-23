@@ -1,1 +1,0 @@
-full smoke.py from previous reads and edits, including all tests for prefs, cross, cloud, etc.
