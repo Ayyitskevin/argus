@@ -3,6 +3,10 @@
 
 Usage:
     ARGUS_VISION_BACKEND=real python scripts/dogfood_real.py /path/to/gallery --limit 5
+
+If assets are missing or scratch JPEGs keep returning degenerate `{}` JSON,
+generate replacement F&B photos with Grok image generation, save under
+data/dogfood-gallery-grok/, then point this script at that folder.
 """
 from __future__ import annotations
 

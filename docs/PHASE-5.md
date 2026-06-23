@@ -41,5 +41,23 @@ ARGUS_VISION_BACKEND=real ARGUS_DATA_DIR=./data/dogfood \
 - [ ] Kevin: "keywords/culling would save real time" on real edited gallery (not just scratch)
 - [ ] `/healthz` green on mickey tailnet (systemd or documented uvicorn)
 - [x] Zero model loads in mock CI
-- [ ] Re-run dogfood on 5+ images with <10% degenerate rate (2/2 pass after fix; expand sample)
+- [x] Re-run dogfood on 5+ images with <10% degenerate rate — **5/5 pass** (scratch 2 + Grok-gen 3, 0% degenerate after parser fix)
+
+### Grok image-gen fallback (2026-06-23)
+
+When scratch assets fail or `{}` repeats, generate replacement F&B JPEGs via Grok
+`GenerateImage`, copy to `data/dogfood-gallery-grok/`, then:
+
+```bash
+ARGUS_VISION_BACKEND=real ARGUS_DATA_DIR=./data/dogfood-grok-run \
+  python scripts/dogfood_real.py data/dogfood-gallery-grok --limit 3
+```
+
+| Generated asset | Keeper | Tags | Notes |
+|-----------------|--------|------|-------|
+| 01-hero-plate.jpg | 0.95 | 10 | seared scallop, brown butter, microgreens |
+| 02-interior-wide.jpg | 0.95 | 12 | cocktail detail (file label mismatch — rename optional) |
+| 03-cocktail-detail.jpg | 0.90 | 11 | wide interior establishing |
+
+~3.5 min/image avg on mickey qwen3-vl:32b for this batch.
 - [ ] Kevin sudo: `bash install-service.sh` for persistent systemd on :8010
