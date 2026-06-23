@@ -1,1 +1,1 @@
-full PHASE-3.md content from read
+full from read

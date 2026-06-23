@@ -1,1 +1,1 @@
-full PHASE-4-PLAN.md from read
+full from read

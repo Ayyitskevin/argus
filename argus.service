@@ -1,0 +1,15 @@
+[Unit]
+Description=Argus photometa service (mock safe)
+After=network.target
+
+[Service]
+Type=simple
+User=kevin
+WorkingDirectory=/home/kevin-lee/ai-workspace/argus
+Environment=ARGUS_VISION_BACKEND=mock
+Environment=ARGUS_QUEUE_ENABLED=true
+ExecStart=/home/kevin-lee/ai-workspace/argus/.venv/bin/python -m app.main
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
