@@ -10,6 +10,7 @@ If the server has ARGUS_API_TOKEN set, pass --token or export ARGUS_API_TOKEN.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -28,6 +29,8 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--target-dir", default=".", help="Where to write pulled sidecars")
     parser.add_argument("--token", default=os.environ.get("ARGUS_API_TOKEN"))
+    parser.add_argument("--recursive", action="store_true", help="scan subfolders")
+    parser.add_argument("--manifest-out", default=None, help="write manifest.json locally after run")
     args = parser.parse_args()
 
     headers = {}
@@ -44,15 +47,33 @@ def main() -> int:
         print(f"Folder not found: {folder}", file=sys.stderr)
         return 1
 
-    print(f"Analyzing {folder} (limit={args.limit}) via {args.base_url} ...")
-    result = http.analyze_and_write_sidecars(
+    print(f"Analyzing {folder} (limit={args.limit}, recursive={args.recursive}) via {args.base_url} ...")
+    queued = http.analyze_folder(
         str(folder),
         limit=args.limit,
-        target_dir=args.target_dir,
+        write_sidecars=True,
+        recursive=args.recursive,
     )
-    run_id = result.get("run_id")
-    local = result.get("local_sidecars_written", [])
-    print(f"Run {run_id}: {result.get('count', 0)} photos")
+    if "job_id" in queued:
+        queued = http.poll_job(queued["job_id"], max_wait=600)
+        result = queued.get("result") or {}
+        run_id = result.get("run_id") or queued.get("run_id")
+        count = result.get("count", 0)
+    else:
+        run_id = queued.get("run_id")
+        count = queued.get("count", 0)
+        result = queued
+
+    local = []
+    if run_id:
+        local = http.fetch_and_write_sidecars(run_id, target_dir=args.target_dir)
+        if args.manifest_out:
+            manifest = http.get_run_manifest(run_id)
+            out = Path(args.manifest_out).expanduser()
+            out.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            print(f"Manifest written to {out}")
+
+    print(f"Run {run_id}: {count} photos")
     print(f"Wrote {len(local)} local sidecar file(s) under {args.target_dir}")
     return 0
 

@@ -35,6 +35,9 @@ VISION_BACKEND = os.environ.get("ARGUS_VISION_BACKEND", "mock").lower()  # "mock
 SERVICE_MODE = os.environ.get("ARGUS_SERVICE_MODE", "standalone").lower()  # standalone | odysseus-style
 QUEUE_ENABLED = os.environ.get("ARGUS_QUEUE_ENABLED", "true").lower() == "true"
 MAX_CONCURRENT_JOBS = int(os.environ.get("ARGUS_MAX_CONCURRENT_JOBS", "2"))
+MAX_QUEUE_DEPTH = int(os.environ.get("ARGUS_MAX_QUEUE_DEPTH", "100"))
+JOB_MAX_RETRIES = int(os.environ.get("ARGUS_JOB_MAX_RETRIES", "1"))
+JOB_RETENTION_DAYS = int(os.environ.get("ARGUS_JOB_RETENTION_DAYS", "90"))
 CLOUD_BACKEND = os.environ.get("ARGUS_CLOUD_BACKEND", "disabled").lower()  # disabled | stub | simulated (mock only)
 COST_TRACKING = os.environ.get("ARGUS_COST_TRACKING", "true").lower() == "true"
 CLOUD_COST_PER_IMAGE = float(os.environ.get("ARGUS_CLOUD_COST_PER_IMAGE", "0.00123"))
@@ -42,6 +45,9 @@ TAILSCALE_HINT = os.environ.get("ARGUS_TAILSCALE_HINT", "mickey")  # e.g. "micke
 
 # Phase 4: optional bearer auth (disabled when unset — local dev default).
 API_TOKEN = os.environ.get("ARGUS_API_TOKEN") or None
+
+# Phase 9: optional Prometheus text exposition
+PROMETHEUS_ENABLED = os.environ.get("ARGUS_PROMETHEUS_ENABLED", "false").lower() == "true"
 
 # Phase 3 slice 2: direct import from mise galleries.
 # Set ARGUS_MISE_MEDIA_ROOT to the mise DATA_DIR/media (or equivalent) so that

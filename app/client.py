@@ -113,6 +113,8 @@ class ArgusClient:
         mise_gallery_id: Optional[int] = None,
         mise_project_id: Optional[int] = None,
         client_id: Optional[str] = None,
+        recursive: bool = False,
+        callback_url: Optional[str] = None,
     ) -> dict[str, Any]:
         """POST /analyze-folder. Returns the full result including run_id, photos, sidecars_written if enabled.
         Phase 3: mise_gallery_id / mise_project_id enable direct mise gallery import (server resolves via
@@ -136,9 +138,55 @@ class ArgusClient:
         effective_client_id = client_id or self.default_client_id
         if effective_client_id:
             data["client_id"] = effective_client_id
+        if recursive:
+            data["recursive"] = "true"
+        if callback_url:
+            data["callback_url"] = callback_url
 
         url = f"{self.base_url}/analyze-folder"
         return self._request("post", url, data=data, method_name="analyze_folder")
+
+    def create_job(
+        self,
+        folder: str,
+        *,
+        limit: int = 20,
+        write_sidecars: bool = False,
+        sidecar_dir: Optional[str] = None,
+        client_id: Optional[str] = None,
+        callback_url: Optional[str] = None,
+        recursive: bool = False,
+        model: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """POST /jobs — explicit queue submission with optional callback."""
+        payload = {
+            "folder": folder,
+            "limit": limit,
+            "write_sidecars": write_sidecars,
+            "recursive": recursive,
+        }
+        if sidecar_dir:
+            payload["sidecar_dir"] = sidecar_dir
+        effective_client_id = client_id or self.default_client_id
+        if effective_client_id:
+            payload["client_id"] = effective_client_id
+        if callback_url:
+            payload["callback_url"] = callback_url
+        if model:
+            payload["model"] = model
+        try:
+            resp = self._client.post(f"{self.base_url}/jobs", json=payload)
+            resp.raise_for_status()
+            return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            raise ArgusError(f"create_job failed: {exc}") from exc
+
+    def get_run_manifest(self, run_id: int, sidecar_dir: Optional[str] = None) -> dict[str, Any]:
+        """GET /runs/{id}/manifest.json — DAM-friendly bundle."""
+        url = f"{self.base_url}/runs/{run_id}/manifest.json"
+        if sidecar_dir:
+            url += f"?sidecar_dir={sidecar_dir}"
+        return self._request("get", url, method_name="get_run_manifest")
 
     def import_mise_gallery(
         self,
@@ -363,7 +411,7 @@ class ArgusClient:
         """
         for _ in range(int(max_wait / interval)):
             job = self.get_job(job_id)
-            if job["status"] in ("done", "failed"):
+            if job["status"] in ("done", "failed", "dead_letter"):
                 return job
             time.sleep(interval)
         raise ArgusError(f"Job {job_id} did not complete within {max_wait}s")

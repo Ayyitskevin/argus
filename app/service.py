@@ -7,6 +7,7 @@ from typing import Any
 
 from . import config, db, vision
 from .sidecars import write_sidecar
+from .callbacks import is_allowed_callback_url
 
 log = logging.getLogger("argus.service")
 
@@ -157,6 +158,81 @@ def analyze_single_image(
     return data
 
 
+def sidecar_refs(image_path: str, sidecar_dir: str | Path | None = None) -> dict[str, str]:
+    """Expected sidecar paths beside an image (DAM manifest helper)."""
+    source = Path(image_path)
+    out_dir = Path(sidecar_dir) if sidecar_dir else source.parent
+    base = source.stem
+    refs = {"argus": str(out_dir / f"{base}.argus.json")}
+    refs["iptc"] = str(out_dir / f"{base}.iptc.json")
+    refs["xmp"] = str(out_dir / f"{base}.xmp")
+    return refs
+
+
+def build_run_manifest(run_id: int, *, sidecar_dir: str | Path | None = None) -> dict | None:
+    """DAM-friendly bundle: paths, scores, and expected sidecar refs."""
+    data = db.get_full_run(run_id)
+    if not data:
+        return None
+
+    run = data["run"]
+    entries = []
+    for photo in data.get("photos", []):
+        culling = photo.get("culling") or {}
+        entries.append(
+            {
+                "id": photo.get("id"),
+                "path": photo.get("image_path"),
+                "basename": photo.get("basename"),
+                "width": photo.get("width"),
+                "height": photo.get("height"),
+                "shot_type": photo.get("shot_type"),
+                "keeper_score": culling.get("keeper_score"),
+                "hero_potential": culling.get("hero_potential"),
+                "technical_quality": culling.get("technical_quality"),
+                "keywords": photo.get("keywords") or [],
+                "alt_text": photo.get("alt_text"),
+                "description": photo.get("description"),
+                "suggested_iptc": photo.get("suggested_iptc") or {},
+                "sidecars": sidecar_refs(photo["image_path"], sidecar_dir=sidecar_dir),
+            }
+        )
+
+    return {
+        "run_id": run["id"],
+        "created_at": run.get("created_at"),
+        "source": run.get("source"),
+        "model": run.get("model"),
+        "photo_count": len(entries),
+        "client_id": extract_client_id(run.get("source")),
+        "archived_at": run.get("archived_at"),
+        "photos": entries,
+    }
+
+
+def queue_accepting_jobs() -> tuple[bool, str | None]:
+    """Backpressure gate for new queued jobs (Phase 9)."""
+    if db.queue_depth() >= config.MAX_QUEUE_DEPTH:
+        return False, f"queue full ({config.MAX_QUEUE_DEPTH} queued jobs)"
+    running = db.count_jobs_by_status("running")
+    if running >= config.MAX_CONCURRENT_JOBS and db.queue_depth() >= config.MAX_CONCURRENT_JOBS:
+        return False, "workers saturated — try again shortly"
+    return True, None
+
+
+def validate_job_create(
+    *,
+    folder: str,
+    callback_url: str | None = None,
+) -> tuple[Path | None, str | None]:
+    path = Path(folder).expanduser().resolve()
+    if not path.is_dir():
+        return None, f"folder not found or not a dir: {folder}"
+    if callback_url and not is_allowed_callback_url(callback_url):
+        return None, "callback_url must be local or tailnet (http/https)"
+    return path, None
+
+
 def analyze_folder_run(
     *,
     folder: Path,
@@ -167,11 +243,18 @@ def analyze_folder_run(
     write_sidecars: bool = False,
     sidecar_dir: str | None = None,
     client_id: str | None = None,
+    recursive: bool = False,
 ) -> dict:
     """Analyze and persist a folder synchronously."""
     model = model or config.VISION_MODEL
     prefs = load_preferences(client_id)
-    analyses = vision.analyze_folder(folder, model=model, limit=limit, prefs=prefs)
+    analyses = vision.analyze_folder(
+        folder,
+        model=model,
+        limit=limit,
+        prefs=prefs,
+        recursive=recursive,
+    )
     out = persist_analysis_run(
         source=source,
         model=model,
@@ -184,6 +267,7 @@ def analyze_folder_run(
         out["project_id"] = project_id
     if client_id:
         out["client_id"] = client_id
+    out["recursive"] = recursive
     return out
 
 

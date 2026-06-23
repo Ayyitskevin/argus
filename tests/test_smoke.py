@@ -99,6 +99,8 @@ def test_write_sidecars_creates_json_iptc_and_xmp(sample_image, tmp_path):
 def test_job_claim_is_atomic(sample_image):
     from app import db
 
+    with db.tx() as con:
+        con.execute("DELETE FROM jobs")
     folder = str(Path(sample_image).parent)
     job_id = db.create_job(folder, source="test-source", model="mock:test")
     claimed = db.claim_next_job()

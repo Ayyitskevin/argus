@@ -112,7 +112,7 @@ def test_client_history_endpoint(sample_image):
         data={"path": sample_image, "client_id": "endpoint-client"},
         headers=AUTH,
     )
-    body = client.get("/clients/endpoint-client/history").json()
+    body = client.get("/clients/endpoint-client/history", headers=AUTH).json()
     assert body["client_id"] == "endpoint-client"
     assert body["num_photos"] >= 1
 

@@ -86,10 +86,14 @@ def _apply_schema(con: sqlite3.Connection) -> None:
         ("photo_analyses", "width", "INTEGER"),
         ("photo_analyses", "height", "INTEGER"),
         ("analysis_runs", "project_id", "TEXT"),
+        ("analysis_runs", "archived_at", "TEXT"),
         ("jobs", "project_id", "TEXT"),
         ("jobs", "source", "TEXT"),
         ("jobs", "model", "TEXT"),
         ("jobs", "client_id", "TEXT"),
+        ("jobs", "callback_url", "TEXT"),
+        ("jobs", "recursive", "BOOLEAN"),
+        ("jobs", "retry_count", "INTEGER"),
     ]:
         try:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {typ}")
@@ -296,15 +300,27 @@ def update_photo_analysis(
     return photo
 
 
-def list_recent_runs(limit: int = 20) -> list[sqlite3.Row]:
+def list_recent_runs(limit: int = 20, *, include_archived: bool = False) -> list[sqlite3.Row]:
     con = connect()
     try:
+        if include_archived:
+            query = "SELECT * FROM analysis_runs ORDER BY id DESC LIMIT ?"
+            return con.execute(query, (limit,)).fetchall()
         return con.execute(
-            "SELECT * FROM analysis_runs ORDER BY id DESC LIMIT ?",
+            "SELECT * FROM analysis_runs WHERE archived_at IS NULL ORDER BY id DESC LIMIT ?",
             (limit,),
         ).fetchall()
     finally:
         close(con)
+
+
+def archive_run(run_id: int) -> bool:
+    with tx() as con:
+        cur = con.execute(
+            "UPDATE analysis_runs SET archived_at=datetime('now') WHERE id=? AND archived_at IS NULL",
+            (run_id,),
+        )
+        return cur.rowcount > 0
 
 
 def get_full_run(run_id: int) -> dict | None:
@@ -335,14 +351,16 @@ def create_job(
     source: str | None = None,
     model: str | None = None,
     client_id: str | None = None,
+    callback_url: str | None = None,
+    recursive: bool = False,
 ) -> str:
     job_id = str(uuid.uuid4())
     with tx() as con:
         con.execute(
             """INSERT INTO jobs
                (id, status, folder, limit_, write_sidecars, sidecar_dir,
-                project_id, source, model, client_id)
-               VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)""",
+                project_id, source, model, client_id, callback_url, recursive, retry_count)
+               VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
             (
                 job_id,
                 folder,
@@ -353,6 +371,8 @@ def create_job(
                 source,
                 model,
                 client_id,
+                callback_url,
+                int(recursive),
             ),
         )
     return job_id
@@ -407,9 +427,14 @@ def claim_next_job() -> dict | None:
     return get_job(job_id)
 
 
-def list_jobs(limit: int = 20) -> list[sqlite3.Row]:
+def list_jobs(limit: int = 20, status: str | None = None) -> list[sqlite3.Row]:
     con = connect()
     try:
+        if status:
+            return con.execute(
+                "SELECT * FROM jobs WHERE status=? ORDER BY created_at DESC, id DESC LIMIT ?",
+                (status, limit),
+            ).fetchall()
         return con.execute(
             "SELECT * FROM jobs ORDER BY created_at DESC, id DESC LIMIT ?",
             (limit,),
@@ -418,11 +443,28 @@ def list_jobs(limit: int = 20) -> list[sqlite3.Row]:
         close(con)
 
 
-def cleanup_old_jobs(days: int = 1) -> None:
+def count_jobs_by_status(status: str) -> int:
+    con = connect()
+    try:
+        row = con.execute(
+            "SELECT COUNT(*) AS n FROM jobs WHERE status=?",
+            (status,),
+        ).fetchone()
+        return int(row["n"]) if row else 0
+    finally:
+        close(con)
+
+
+def queue_depth() -> int:
+    return count_jobs_by_status("queued")
+
+
+def cleanup_old_jobs(days: int | None = None) -> None:
+    days = days if days is not None else 90
     cutoff = (datetime.now() - timedelta(days=days)).isoformat()
     with tx() as con:
         con.execute(
-            "DELETE FROM jobs WHERE status IN ('done', 'failed') AND updated_at < ?",
+            "DELETE FROM jobs WHERE status IN ('done', 'failed', 'dead_letter') AND updated_at < ?",
             (cutoff,),
         )
 

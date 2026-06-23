@@ -12,13 +12,14 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 from . import config, db, metrics, service
 from .auth import require_bearer
+from .callbacks import is_allowed_callback_url
 from .jobs import JobWorker
 from .sidecars import write_sidecar
 from .vision import make_thumbnail
@@ -45,6 +46,19 @@ class PhotoPatch(BaseModel):
     promote_keywords: list[str] | None = None
 
 
+class JobCreate(BaseModel):
+    folder: str
+    limit: int = 20
+    write_sidecars: bool = False
+    sidecar_dir: str | None = None
+    client_id: str | None = None
+    callback_url: str | None = None
+    recursive: bool = False
+    model: str | None = None
+    project_id: str | None = None
+    source: str | None = None
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init()
@@ -57,12 +71,58 @@ async def lifespan(app: FastAPI):
         worker.stop()
 
 
-app = FastAPI(title="argus / photometa", version="phase4", lifespan=lifespan)
+app = FastAPI(title="argus / photometa", version="phase9", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 def error(message: str, status_code: int) -> JSONResponse:
     return JSONResponse({"error": message}, status_code=status_code)
+
+
+def _enqueue_folder_job(
+    *,
+    path: Path,
+    source: str,
+    model_name: str,
+    limit: int,
+    write_sidecars: bool,
+    sidecar_dir: str | None,
+    project_id: str | None,
+    client_id: str | None,
+    callback_url: str | None,
+    recursive: bool,
+    extra: dict | None = None,
+) -> JSONResponse:
+    ok, reason = service.queue_accepting_jobs()
+    if not ok:
+        return error(reason or "queue saturated", 503)
+
+    if callback_url and not is_allowed_callback_url(callback_url):
+        return error("callback_url must be local or tailnet (http/https)", 400)
+
+    job_id = db.create_job(
+        str(path),
+        limit or 20,
+        write_sidecars,
+        sidecar_dir,
+        project_id=project_id,
+        source=source,
+        model=model_name,
+        client_id=client_id,
+        callback_url=callback_url,
+        recursive=recursive,
+    )
+    response = {
+        "job_id": job_id,
+        "status": "queued",
+        "source": source,
+        "recursive": recursive,
+    }
+    if callback_url:
+        response["callback_url"] = callback_url
+    if extra:
+        response.update(extra)
+    return JSONResponse(response)
 
 
 @app.get("/healthz")
@@ -76,6 +136,8 @@ def healthz():
         "cloud_cost_per_image": config.CLOUD_COST_PER_IMAGE,
         "tailscale_hint": config.TAILSCALE_HINT,
         "auth_enabled": bool(config.API_TOKEN),
+        "prometheus_enabled": config.PROMETHEUS_ENABLED,
+        "queue_depth": db.queue_depth() if config.QUEUE_ENABLED else 0,
         "model": config.VISION_MODEL,
         "ollama": config.OLLAMA_HOST,
     }
@@ -86,7 +148,17 @@ def get_metrics():
     return metrics.snapshot()
 
 
-@app.get("/clients/{client_id}/history", response_class=JSONResponse)
+@app.get("/metrics/prometheus", response_class=PlainTextResponse)
+def get_metrics_prometheus():
+    if not config.PROMETHEUS_ENABLED:
+        return PlainTextResponse("prometheus metrics disabled", status_code=404)
+    return PlainTextResponse(
+        metrics.prometheus_text(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
+
+
+@app.get("/clients/{client_id}/history", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
 def client_history(client_id: str):
     return db.get_client_history_stats(client_id)
 
@@ -172,6 +244,8 @@ def analyze_folder_endpoint(
     mise_gallery_id: Optional[int] = Form(None),
     mise_project_id: Optional[int] = Form(None),
     client_id: Optional[str] = Form(None),
+    recursive: bool = Form(False),
+    callback_url: Optional[str] = Form(None),
 ):
     path, mise_info, attempted = service.resolve_mise_folder(
         folder=folder,
@@ -188,24 +262,26 @@ def analyze_folder_endpoint(
     model_name = model or config.VISION_MODEL
 
     if config.QUEUE_ENABLED:
-        job_id = db.create_job(
-            str(path),
-            limit or 20,
-            write_sidecars,
-            sidecar_dir,
-            project_id=project_id,
-            source=source,
-            model=model_name,
-            client_id=client_id,
-        )
-        response = {"job_id": job_id, "status": "queued", "source": source}
+        extra = {}
         if mise_info:
-            response["mise"] = mise_info
+            extra["mise"] = mise_info
         if project_id:
-            response["project_id"] = project_id
+            extra["project_id"] = project_id
         if client_id:
-            response["client_id"] = client_id
-        return response
+            extra["client_id"] = client_id
+        return _enqueue_folder_job(
+            path=path,
+            source=source,
+            model_name=model_name,
+            limit=limit or 20,
+            write_sidecars=write_sidecars,
+            sidecar_dir=sidecar_dir,
+            project_id=project_id,
+            client_id=client_id,
+            callback_url=callback_url,
+            recursive=recursive,
+            extra=extra,
+        )
 
     result = service.analyze_folder_run(
         folder=path,
@@ -216,6 +292,7 @@ def analyze_folder_endpoint(
         write_sidecars=write_sidecars,
         sidecar_dir=sidecar_dir,
         client_id=client_id,
+        recursive=recursive,
     )
     metrics.inc("analyze_folder")
     metrics.inc("photos_analyzed", result["count"])
@@ -405,11 +482,78 @@ def patch_run_photo(run_id: int, photo_id: int, patch: PhotoPatch):
 
 
 @app.get("/runs", response_class=JSONResponse)
-def list_runs():
-    return {"runs": [dict(row) for row in db.list_recent_runs()]}
+def list_runs(include_archived: bool = Query(False)):
+    return {
+        "runs": [
+            dict(row)
+            for row in db.list_recent_runs(include_archived=include_archived)
+        ]
+    }
 
 
-@app.get("/runs/{run_id}/export", response_class=JSONResponse)
+@app.post("/jobs", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
+def create_job_endpoint(body: JobCreate):
+    path, err = service.validate_job_create(folder=body.folder, callback_url=body.callback_url)
+    if err:
+        return error(err, 400 if "callback" in err else 404)
+    assert path is not None
+
+    source = body.source or service.source_label(path, client_id=body.client_id)
+    model_name = body.model or config.VISION_MODEL
+    if not config.QUEUE_ENABLED:
+        result = service.analyze_folder_run(
+            folder=path,
+            source=source,
+            model=model_name,
+            limit=body.limit,
+            project_id=body.project_id,
+            write_sidecars=body.write_sidecars,
+            sidecar_dir=body.sidecar_dir,
+            client_id=body.client_id,
+            recursive=body.recursive,
+        )
+        metrics.inc("analyze_folder")
+        metrics.inc("photos_analyzed", result["count"])
+        return {"status": "done", **result}
+
+    return _enqueue_folder_job(
+        path=path,
+        source=source,
+        model_name=model_name,
+        limit=body.limit,
+        write_sidecars=body.write_sidecars,
+        sidecar_dir=body.sidecar_dir,
+        project_id=body.project_id,
+        client_id=body.client_id,
+        callback_url=body.callback_url,
+        recursive=body.recursive,
+        extra={"client_id": body.client_id} if body.client_id else None,
+    )
+
+
+@app.get("/runs/{run_id}/manifest.json", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
+def run_manifest(run_id: int, sidecar_dir: Optional[str] = Query(None)):
+    manifest = service.build_run_manifest(run_id, sidecar_dir=sidecar_dir)
+    if not manifest:
+        return error("run not found", 404)
+    return manifest
+
+
+@app.post(
+    "/runs/{run_id}/archive",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_bearer)],
+)
+def archive_run_endpoint(run_id: int):
+    if not db.archive_run(run_id):
+        if db.get_run(run_id) is None:
+            return error("run not found", 404)
+        return error("run already archived", 409)
+    metrics.inc("runs_archived")
+    return {"ok": True, "run_id": run_id, "archived": True}
+
+
+@app.get("/runs/{run_id}/export", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
 def export_run(run_id: int):
     data = db.get_full_run(run_id)
     if not data:
@@ -417,7 +561,7 @@ def export_run(run_id: int):
     return data
 
 
-@app.get("/runs/{run_id}/export.csv")
+@app.get("/runs/{run_id}/export.csv", dependencies=[Depends(require_bearer)])
 def export_run_csv(run_id: int):
     data = db.get_full_run(run_id)
     if not data:
@@ -515,8 +659,8 @@ def get_costs(summary: bool = False):
 
 
 @app.get("/jobs", response_class=JSONResponse)
-def list_jobs_endpoint(limit: int = 20):
-    return {"jobs": [dict(row) for row in db.list_jobs(limit)]}
+def list_jobs_endpoint(limit: int = 20, status: Optional[str] = Query(None)):
+    return {"jobs": [dict(row) for row in db.list_jobs(limit, status=status)]}
 
 
 @app.get("/jobs/{job_id}", response_class=JSONResponse)
@@ -560,6 +704,7 @@ def cli_main():
     parser.add_argument("--mise-gallery-id", type=int, default=None)
     parser.add_argument("--mise-project-id", type=int, default=None)
     parser.add_argument("--client-id", default=None)
+    parser.add_argument("--recursive", action="store_true", help="scan subfolders for images")
     args = parser.parse_args()
 
     cfg = {}
@@ -591,7 +736,7 @@ def cli_main():
         if args.mise_project_id is not None:
             mise_info["project_id"] = args.mise_project_id
         source = service.source_label(path, mise_info=mise_info, client_id=args.client_id)
-        print(f"Analyzing {path} (limit={limit}) ...")
+        print(f"Analyzing {path} (limit={limit}, recursive={args.recursive}) ...")
         result = service.analyze_folder_run(
             folder=path,
             source=source,
@@ -600,6 +745,7 @@ def cli_main():
             write_sidecars=args.write_sidecars,
             sidecar_dir=sidecar_dir,
             client_id=args.client_id,
+            recursive=args.recursive,
         )
         total += result["count"]
         print(f"Run {result['run_id']} created with {result['count']} photos (source={source})")

@@ -314,19 +314,34 @@ def analyze_image(
         )
 
 
+def collect_folder_images(folder: str | Path, *, recursive: bool = False) -> list[Path]:
+    """List supported image files in a folder (optionally recursive)."""
+    root = Path(folder)
+    if recursive:
+        images = [
+            path
+            for path in root.rglob("*")
+            if path.is_file() and path.suffix.lower() in config.PHOTO_EXTS
+        ]
+    else:
+        images = [
+            path
+            for path in root.iterdir()
+            if path.is_file() and path.suffix.lower() in config.PHOTO_EXTS
+        ]
+    return sorted(images)
+
+
 def analyze_folder(
     folder: str | Path,
     model: str | None = None,
     limit: int | None = None,
     prefs: dict | None = None,
+    recursive: bool = False,
 ) -> list[AnalysisResult]:
-    """Analyze all supported images in a folder (non-recursive for Phase 0). Returns typed results."""
+    """Analyze supported images in a folder. Set recursive=True for nested galleries."""
     model = model or config.VISION_MODEL
-    p = Path(folder)
-    images = sorted(
-        f for f in p.iterdir()
-        if f.is_file() and f.suffix.lower() in config.PHOTO_EXTS
-    )
+    images = collect_folder_images(folder, recursive=recursive)
     if limit:
         images = images[:limit]
 
