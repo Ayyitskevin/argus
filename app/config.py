@@ -69,6 +69,29 @@ ANTHROPIC_VISION_MODEL = os.environ.get("ANTHROPIC_VISION_MODEL", "claude-sonnet
 # Phase 9: optional Prometheus text exposition
 PROMETHEUS_ENABLED = os.environ.get("ARGUS_PROMETHEUS_ENABLED", "false").lower() == "true"
 
+# Phase 11 — production SaaS (storage, rate limits, audit, billing)
+STORAGE_BACKEND = os.environ.get("ARGUS_STORAGE_BACKEND", "local").lower()  # local | s3
+S3_BUCKET = os.environ.get("ARGUS_S3_BUCKET") or None
+S3_REGION = os.environ.get("ARGUS_S3_REGION", "us-east-1")
+S3_ENDPOINT = os.environ.get("ARGUS_S3_ENDPOINT") or None  # MinIO / R2 custom endpoint
+S3_ACCESS_KEY = os.environ.get("ARGUS_S3_ACCESS_KEY") or None
+S3_SECRET_KEY = os.environ.get("ARGUS_S3_SECRET_KEY") or None
+S3_PREFIX = os.environ.get("ARGUS_S3_PREFIX", "argus/tenants")
+
+RATE_LIMIT_ENABLED = os.environ.get("ARGUS_RATE_LIMIT_ENABLED", "true").lower() == "true"
+RATE_LIMIT_PER_MINUTE = int(os.environ.get("ARGUS_RATE_LIMIT_PER_MINUTE", "60"))
+RATE_LIMIT_ANALYZE_PER_MINUTE = int(os.environ.get("ARGUS_RATE_LIMIT_ANALYZE_PER_MINUTE", "20"))
+
+AUDIT_LOG_ENABLED = os.environ.get("ARGUS_AUDIT_LOG_ENABLED", "true").lower() == "true"
+AUDIT_LOG_RETENTION_DAYS = int(os.environ.get("ARGUS_AUDIT_LOG_RETENTION_DAYS", "90"))
+
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY") or None
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET") or None
+STRIPE_PRICE_ID = os.environ.get("STRIPE_PRICE_ID") or None  # subscription price
+STRIPE_SUCCESS_URL = os.environ.get("STRIPE_SUCCESS_URL", "http://127.0.0.1:8010/ui/saas/billing?success=1")
+STRIPE_CANCEL_URL = os.environ.get("STRIPE_CANCEL_URL", "http://127.0.0.1:8010/ui/saas/billing?cancelled=1")
+SAAS_PUBLIC_URL = os.environ.get("ARGUS_SAAS_PUBLIC_URL", f"http://{HOST}:{PORT}")
+
 # Phase 3 slice 2: direct import from mise galleries.
 # Set ARGUS_MISE_MEDIA_ROOT to the mise DATA_DIR/media (or equivalent) so that
 # --mise-gallery-id / mise_gallery_id= can auto-resolve to .../<id>/original

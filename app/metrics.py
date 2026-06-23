@@ -29,11 +29,20 @@ _counters: dict[str, int] = {
 _gauges: dict[str, float] = {
     "grok_cost_usd": 0.0,
 }
+_tenant_counters: dict[str, dict[str, int]] = {}
 
 
 def inc(name: str, amount: int = 1) -> None:
     with _lock:
         _counters[name] = _counters.get(name, 0) + amount
+
+
+def inc_tenant(tenant_id: str | None, name: str, amount: int = 1) -> None:
+    if not tenant_id:
+        return
+    with _lock:
+        bucket = _tenant_counters.setdefault(tenant_id, {})
+        bucket[name] = bucket.get(name, 0) + amount
 
 
 def add_float(name: str, amount: float) -> None:
@@ -52,13 +61,18 @@ def record_grok_usage(usage: dict) -> None:
         add_float("grok_cost_usd", float(cost))
 
 
-def snapshot() -> dict:
+def snapshot(*, tenant_id: str | None = None) -> dict:
     with _lock:
-        return {
+        out = {
             "uptime_seconds": round(time.time() - _started_at, 1),
             "counters": dict(_counters),
             "gauges": {k: round(v, 6) for k, v in _gauges.items()},
         }
+        if tenant_id:
+            out["tenant_counters"] = dict(_tenant_counters.get(tenant_id, {}))
+        elif _tenant_counters:
+            out["by_tenant"] = {tid: dict(vals) for tid, vals in _tenant_counters.items()}
+        return out
 
 
 def prometheus_text() -> str:
@@ -87,4 +101,14 @@ def prometheus_text() -> str:
                 f"{metric} {value}",
             ]
         )
+    for tenant_id, counters in sorted(snap.get("by_tenant", {}).items()):
+        for name, value in sorted(counters.items()):
+            metric = f"argus_tenant_{name}_total"
+            lines.extend(
+                [
+                    f"# HELP {metric} Per-tenant counter {name}.",
+                    f"# TYPE {metric} counter",
+                    f'{metric}{{tenant_id="{tenant_id}"}} {value}',
+                ]
+            )
     return "\n".join(lines) + "\n"

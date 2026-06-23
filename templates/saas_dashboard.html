@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .dash-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 960px) { .dash-grid { grid-template-columns: 1fr; } }
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th, td { text-align: left; padding: .45rem .5rem; border-bottom: 1px solid var(--line); }
+  .stat { font-size: 1.4rem; font-weight: 700; color: var(--accent); }
+</style>
+
+<div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:.75rem">
+    <h2 style="margin:0">
+      {% if portal_mode == 'admin' %}Admin console{% else %}{{ tenant.name }} dashboard{% endif %}
+    </h2>
+    <div>
+      {% if portal_mode == 'admin' %}
+      <a class="btn secondary" href="/ui/saas/app/admin">Refresh</a>
+      {% else %}
+      <a class="btn secondary" href="/ui/saas/billing">Billing</a>
+      {% endif %}
+      <form method="post" action="/ui/logout" style="display:inline"><button type="submit" class="secondary">Logout</button></form>
+    </div>
+  </div>
+</div>
+
+{% if portal_mode == 'tenant' %}
+<div class="dash-grid">
+  <div class="card">
+    <h3 style="margin-top:0">Usage this month</h3>
+    <div class="stat">{{ usage.tenant.images_analyzed }} images</div>
+    <p class="small">${{ "%.4f"|format(usage.tenant.cost_usd) }} estimated · cap {{ usage.caps.tenant_monthly_images or '∞' }} imgs</p>
+    <form method="post" action="/ui/saas/analyze" enctype="multipart/form-data" style="margin-top:1rem">
+      <label class="small">Upload &amp; analyze
+        <input type="file" name="file" accept="image/*" required>
+      </label>
+      <div style="margin-top:.5rem"><button type="submit">Analyze</button></div>
+    </form>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">API</h3>
+    <p class="small">POST <code>/analyze</code> with <code>Authorization: Bearer argus_tk_…</code></p>
+    <p class="small">Provider: <strong>{{ tenant.vision_provider }}</strong> · Plan: {{ tenant.plan_tier or 'trial' }}</p>
+    <p class="small">Billing: {{ tenant.billing_status or 'not linked' }}</p>
+  </div>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">Recent runs</h3>
+  {% if recent_runs %}
+  <table>
+    <tr><th>ID</th><th>Photos</th><th>Model</th><th>Created</th></tr>
+    {% for run in recent_runs %}
+    <tr>
+      <td><a href="/runs/{{ run.id }}">{{ run.id }}</a></td>
+      <td>{{ run.photo_count }}</td>
+      <td>{{ run.model }}</td>
+      <td class="small">{{ run.created_at }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="small">No runs yet — upload a photo above.</p>
+  {% endif %}
+</div>
+{% else %}
+<div class="dash-grid">
+  <div class="card">
+    <h3 style="margin-top:0">Global usage</h3>
+    <div class="stat">{{ global_usage.images_analyzed }} images</div>
+    <p class="small">${{ "%.4f"|format(global_usage.cost_usd) }} this period</p>
+  </div>
+  <div class="card">
+    <h3 style="margin-top:0">Tenants</h3>
+    <div class="stat">{{ tenants|length }}</div>
+    <p class="small">Use <code>scripts/tenant_admin.py</code> or POST <code>/admin/tenants</code></p>
+  </div>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">Tenants</h3>
+  <table>
+    <tr><th>ID</th><th>Name</th><th>Active</th><th>Images/mo cap</th><th>Billing</th></tr>
+    {% for t in tenants %}
+    <tr>
+      <td><code>{{ t.id }}</code></td>
+      <td>{{ t.name }}</td>
+      <td>{{ 'yes' if t.active else 'no' }}</td>
+      <td>{{ t.monthly_image_cap or '—' }}</td>
+      <td>{{ t.billing_status or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3 style="margin-top:0">Audit log (recent)</h3>
+  {% if audit_events %}
+  <table>
+    <tr><th>Time</th><th>Actor</th><th>Action</th><th>Status</th></tr>
+    {% for ev in audit_events %}
+    <tr>
+      <td class="small">{{ ev.created_at }}</td>
+      <td class="small">{{ ev.actor or '—' }}</td>
+      <td><code>{{ ev.action }}</code></td>
+      <td>{{ ev.status or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="small">No audit events yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

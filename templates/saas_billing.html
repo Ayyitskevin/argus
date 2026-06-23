@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="max-width: 640px; margin: 1rem auto;">
+  <h2 style="margin-top:0">Billing</h2>
+  {% if billing_success %}
+  <p class="status-ok">Checkout completed — subscription should activate shortly via Stripe webhook.</p>
+  {% endif %}
+  {% if billing_cancelled %}
+  <p class="small">Checkout cancelled.</p>
+  {% endif %}
+  {% if tenant %}
+  <p class="small">Tenant <strong>{{ tenant.id }}</strong> · status: {{ tenant.billing_status or 'pending' }}</p>
+  {% endif %}
+  {% if billing_enabled %}
+  <p class="small">Stripe is configured. Use API <code>POST /tenant/billing/checkout</code> or ask admin for checkout link.</p>
+  {% else %}
+  <p class="small">Stripe not configured on this deploy (<code>STRIPE_SECRET_KEY</code> + <code>STRIPE_PRICE_ID</code>).</p>
+  {% endif %}
+  <a class="btn secondary" href="/ui/saas/app">Back to dashboard</a>
+</div>
+{% endblock %}

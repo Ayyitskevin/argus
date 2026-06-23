@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card" style="max-width: 480px; margin: 2rem auto;">
+  <h2 style="margin-top:0">Sign in to Argus Cloud</h2>
+  <p class="small">Paste your <code>argus_tk_*</code> tenant API key or homelab admin token.</p>
+  {% if login_error %}
+  <p class="status-err">{{ login_error }}</p>
+  {% endif %}
+  <form method="post" action="/ui/saas/login">
+    <label class="small">API key / admin token
+      <input type="password" name="api_token" required style="width:100%; margin-top:.35rem" autocomplete="current-password">
+    </label>
+    <div style="margin-top:1rem">
+      <button type="submit">Continue</button>
+      <a class="btn secondary" href="/ui/saas" style="margin-left:.5rem">Back</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

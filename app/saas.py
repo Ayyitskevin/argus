@@ -16,7 +16,21 @@ from .auth_context import AuthContext
 log = logging.getLogger("argus.saas")
 
 # Routes that stay public when SAAS_MODE is on.
-SAAS_PUBLIC_PATHS = frozenset({"/healthz", "/saas/status", "/vision/status", "/openapi.json", "/docs", "/redoc"})
+SAAS_PUBLIC_PATHS = frozenset({
+    "/healthz",
+    "/saas/status",
+    "/vision/status",
+    "/openapi.json",
+    "/docs",
+    "/redoc",
+    "/webhooks/stripe",
+})
+
+SAAS_PUBLIC_UI_PREFIXES = (
+    "/ui/saas",
+    "/ui/saas/login",
+    "/static/",
+)
 
 # Prefixes requiring authentication for non-admin API/UI data access.
 SAAS_PROTECTED_PREFIXES = (
@@ -95,6 +109,10 @@ def get_job_for_ctx(job_id: str, ctx: AuthContext | None) -> dict | None:
 
 def _path_requires_saas_auth(path: str) -> bool:
     if path in SAAS_PUBLIC_PATHS:
+        return False
+    if path.startswith("/ui/saas") and not path.startswith("/ui/saas/app"):
+        return False
+    if any(path.startswith(prefix) for prefix in SAAS_PUBLIC_UI_PREFIXES):
         return False
     if path.startswith("/static"):
         return False

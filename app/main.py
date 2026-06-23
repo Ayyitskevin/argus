@@ -11,14 +11,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, Form, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 from . import config, db, metrics, service
-from .auth import UI_TOKEN_COOKIE, require_admin, require_bearer, verify_api_access
+from .auth import UI_TOKEN_COOKIE, require_admin, require_bearer, resolve_auth, verify_api_access
 from .auth_context import AuthContext
 from . import metering, tenants
 from .metering import MeteringError
@@ -28,8 +28,8 @@ from .jobs import JobWorker
 from .sidecars import write_sidecar
 from .vision import make_thumbnail
 from .vision_status import vision_status
-from . import saas
-from .saas import assert_upload_only, get_full_run_for_ctx, get_job_for_ctx, tenant_scope, tenant_upload_path
+from . import audit, billing, rate_limit, saas, storage
+from .saas import assert_upload_only, get_full_run_for_ctx, get_job_for_ctx, tenant_scope
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -101,6 +101,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="argus / photometa", version="phase10", lifespan=lifespan)
+app.middleware("http")(rate_limit.rate_limit_middleware)
 app.middleware("http")(saas.saas_auth_middleware)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -244,6 +245,7 @@ def home(request: Request):
 
 @app.post("/analyze", response_class=JSONResponse)
 async def analyze_single(
+    request: Request,
     file: Optional[UploadFile] = File(None),
     path: Optional[str] = Form(None),
     model: Optional[str] = Form(None),
@@ -266,12 +268,15 @@ async def analyze_single(
     try:
         if file is not None:
             safe_name = Path(file.filename or "upload.jpg").name
+            raw = await file.read()
             if ctx.tenant_id:
-                tmp_path = tenant_upload_path(ctx.tenant_id, safe_name)
+                stored = storage.save_tenant_upload(ctx.tenant_id, safe_name, raw)
+                image_path = storage.resolve_upload_path(stored)
+                tmp_path = image_path if not str(stored).startswith("s3://") else image_path
             else:
                 tmp_path = config.DATA_DIR / f"upload_{uuid.uuid4().hex}_{safe_name}"
-            tmp_path.write_bytes(await file.read())
-            image_path = tmp_path
+                tmp_path.write_bytes(raw)
+                image_path = tmp_path
         else:
             image_path = Path(path or "").expanduser().resolve()
             if not image_path.is_file():
@@ -288,6 +293,9 @@ async def analyze_single(
             return error(exc.message, exc.status_code)
         metrics.inc("analyze_single")
         metrics.inc("photos_analyzed")
+        metrics.inc_tenant(ctx.tenant_id, "analyze_single")
+        metrics.inc_tenant(ctx.tenant_id, "photos_analyzed")
+        audit.record("analyze.single", request=request, ctx=ctx, status="ok", resource=str(image_path))
         if write_sidecar:
             if tmp_path is None:
                 written = write_sidecar(str(image_path), out, sidecar_dir=sidecar_dir)
@@ -976,6 +984,10 @@ def saas_status():
         "cloud_backend": config.CLOUD_BACKEND,
         "default_vision_provider": config.DEFAULT_VISION_PROVIDER,
         "providers": ["grok", "openai", "anthropic"],
+        "storage_backend": config.STORAGE_BACKEND,
+        "rate_limit_enabled": config.RATE_LIMIT_ENABLED,
+        "audit_log_enabled": config.AUDIT_LOG_ENABLED,
+        "billing_enabled": billing.billing_enabled(),
         "metering": metering.usage_snapshot(),
     }
 
@@ -1002,7 +1014,7 @@ def admin_list_tenants(active_only: bool = Query(False)):
 
 
 @app.post("/admin/tenants", response_class=JSONResponse, dependencies=[Depends(require_admin)])
-def admin_create_tenant(body: TenantCreate):
+def admin_create_tenant(request: Request, body: TenantCreate, ctx: AuthContext = Depends(require_admin)):
     if not config.SAAS_MODE:
         return error("ARGUS_SAAS_MODE is disabled", 404)
     try:
@@ -1014,7 +1026,9 @@ def admin_create_tenant(body: TenantCreate):
             monthly_image_cap=body.monthly_image_cap,
         )
     except TenantError as exc:
+        audit.record("admin.tenant.create", request=request, ctx=ctx, status="error", detail=str(exc))
         return error(str(exc), 400)
+    audit.record("admin.tenant.create", request=request, ctx=ctx, tenant_id=tenant["id"], resource=tenant["id"])
     return {"tenant": tenant}
 
 
@@ -1073,6 +1087,192 @@ def admin_tenant_usage(tenant_id: str):
     if not db.get_tenant(tenant_id):
         return error("tenant not found", 404)
     return metering.usage_snapshot(tenant_id)
+
+
+@app.get("/admin/audit", response_class=JSONResponse, dependencies=[Depends(require_admin)])
+def admin_audit_log(tenant_id: Optional[str] = Query(None), limit: int = Query(50, ge=1, le=500)):
+    if not config.SAAS_MODE:
+        return error("ARGUS_SAAS_MODE is disabled", 404)
+    return {"events": db.list_audit_events(tenant_id=tenant_id, limit=limit)}
+
+
+@app.post("/admin/tenants/{tenant_id}/billing/checkout", response_class=JSONResponse, dependencies=[Depends(require_admin)])
+def admin_billing_checkout(tenant_id: str, request: Request, ctx: AuthContext = Depends(require_admin)):
+    if not config.SAAS_MODE:
+        return error("ARGUS_SAAS_MODE is disabled", 404)
+    try:
+        session = billing.create_checkout_session(tenant_id)
+    except billing.BillingError as exc:
+        return error(str(exc), 400)
+    audit.record("billing.checkout", request=request, ctx=ctx, tenant_id=tenant_id, detail=session)
+    return session
+
+
+@app.post("/tenant/billing/checkout", response_class=JSONResponse)
+def tenant_billing_checkout(request: Request, ctx: AuthContext = Depends(require_bearer)):
+    if not ctx.tenant:
+        return error("tenant API key required", 403)
+    try:
+        session = billing.create_checkout_session(ctx.tenant_id)
+    except billing.BillingError as exc:
+        return error(str(exc), 400)
+    audit.record("billing.checkout", request=request, ctx=ctx, tenant_id=ctx.tenant_id, detail=session)
+    return session
+
+
+@app.post("/webhooks/stripe")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature")
+    if not billing.verify_webhook_signature(payload, sig):
+        return error("invalid stripe signature", 400)
+    try:
+        event = json.loads(payload.decode("utf-8"))
+    except json.JSONDecodeError:
+        return error("invalid json", 400)
+    billing.handle_webhook_event(event)
+    audit.record("billing.webhook", request=request, detail={"type": event.get("type")})
+    return {"received": True}
+
+
+@app.get("/ui/saas", response_class=HTMLResponse)
+def ui_saas_landing(request: Request):
+    if not config.SAAS_MODE:
+        return RedirectResponse("/", status_code=302)
+    return templates.TemplateResponse(
+        request,
+        "saas_landing.html",
+        _ui_context(
+            title="Argus Cloud",
+            billing_enabled=billing.billing_enabled(),
+        ),
+    )
+
+
+@app.get("/ui/saas/login", response_class=HTMLResponse)
+def ui_saas_login(request: Request):
+    if not config.SAAS_MODE:
+        return RedirectResponse("/", status_code=302)
+    return templates.TemplateResponse(request, "saas_login.html", _ui_context(title="Sign in"))
+
+
+@app.post("/ui/saas/login")
+def ui_saas_login_post(request: Request, api_token: str = Form(...)):
+    if not config.SAAS_MODE:
+        return RedirectResponse("/", status_code=302)
+    try:
+        ctx = resolve_auth(request, form_token=api_token)
+    except HTTPException:
+        return templates.TemplateResponse(
+            request,
+            "saas_login.html",
+            _ui_context(title="Sign in", login_error="Invalid API key or admin token"),
+            status_code=401,
+        )
+    dest = "/ui/saas/app/admin" if ctx.is_admin else "/ui/saas/app"
+    response = RedirectResponse(dest, status_code=303)
+    response.set_cookie(UI_TOKEN_COOKIE, api_token.strip(), httponly=True, samesite="lax", max_age=60 * 60 * 24 * 30)
+    return response
+
+
+@app.get("/ui/saas/app", response_class=HTMLResponse)
+def ui_saas_tenant_app(request: Request):
+    ctx = _request_auth(request)
+    if ctx is None or ctx.is_admin or not ctx.tenant:
+        return RedirectResponse("/ui/saas/login", status_code=303)
+    usage = metering.usage_snapshot(ctx.tenant_id)
+    recent = [
+        dict(row)
+        for row in db.list_recent_runs(limit=8, tenant_id=ctx.tenant_id)
+    ]
+    audit_events = db.list_audit_events(tenant_id=ctx.tenant_id, limit=15)
+    return templates.TemplateResponse(
+        request,
+        "saas_dashboard.html",
+        _ui_context(
+            title="Tenant dashboard",
+            portal_mode="tenant",
+            tenant=ctx.tenant,
+            usage=usage,
+            recent_runs=recent,
+            audit_events=audit_events,
+            billing_enabled=billing.billing_enabled(),
+        ),
+    )
+
+
+@app.get("/ui/saas/app/admin", response_class=HTMLResponse)
+def ui_saas_admin_app(request: Request):
+    ctx = _request_auth(request)
+    if ctx is None or not ctx.is_admin:
+        return RedirectResponse("/ui/saas/login", status_code=303)
+    tenant_rows = db.list_tenants()
+    global_usage = db.global_usage_totals()
+    audit_events = db.list_audit_events(limit=25)
+    return templates.TemplateResponse(
+        request,
+        "saas_dashboard.html",
+        _ui_context(
+            title="Admin console",
+            portal_mode="admin",
+            tenants=tenant_rows,
+            global_usage=global_usage,
+            audit_events=audit_events,
+            billing_enabled=billing.billing_enabled(),
+        ),
+    )
+
+
+@app.get("/ui/saas/billing", response_class=HTMLResponse)
+def ui_saas_billing(request: Request, success: Optional[str] = Query(None), cancelled: Optional[str] = Query(None)):
+    ctx = _request_auth(request)
+    if ctx is None:
+        return RedirectResponse("/ui/saas/login", status_code=303)
+    tenant = ctx.tenant if ctx.tenant else None
+    return templates.TemplateResponse(
+        request,
+        "saas_billing.html",
+        _ui_context(
+            title="Billing",
+            tenant=tenant,
+            billing_success=bool(success),
+            billing_cancelled=bool(cancelled),
+            billing_enabled=billing.billing_enabled(),
+        ),
+    )
+
+
+@app.post("/ui/saas/analyze")
+async def ui_saas_analyze(
+    request: Request,
+    file: UploadFile = File(...),
+    model: Optional[str] = Form(None),
+    api_token: Optional[str] = Form(None),
+):
+    ctx = verify_api_access(request, form_token=api_token)
+    if not ctx.tenant:
+        return RedirectResponse("/ui/saas/login", status_code=303)
+    safe_name = Path(file.filename or "upload.jpg").name
+    raw = await file.read()
+    stored = storage.save_tenant_upload(ctx.tenant_id, safe_name, raw)
+    image_path = storage.resolve_upload_path(stored)
+    try:
+        out = service.analyze_single_image(
+            image_path=image_path,
+            model=model,
+            tenant=ctx.tenant,
+        )
+    except service.AnalyzeError as exc:
+        audit.record("analyze.single", request=request, ctx=ctx, status="error", detail=exc.message)
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            _ui_context(title="Analyze failed", message=exc.message, status_code=exc.status_code),
+            status_code=exc.status_code,
+        )
+    metrics.inc_tenant(ctx.tenant_id, "analyze_single")
+    audit.record("analyze.single", request=request, ctx=ctx, resource=str(image_path), detail={"run_id": out["run_id"]})
+    return RedirectResponse(f"/runs/{out['run_id']}", status_code=303)
 
 
 def cli_main():

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .saas-hero {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr;
+    gap: 1.5rem;
+    align-items: center;
+    margin-bottom: 1.5rem;
+  }
+  @media (max-width: 900px) { .saas-hero { grid-template-columns: 1fr; } }
+  .saas-hero img {
+    width: 100%;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    max-height: 320px;
+    object-fit: cover;
+  }
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+  }
+  .feature { padding: 1rem; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+  .cta-row { display: flex; gap: .75rem; flex-wrap: wrap; margin-top: 1rem; }
+</style>
+
+<div class="card">
+  <div class="saas-hero">
+    <div>
+      <span class="badge">Argus Cloud</span>
+      <h2 style="margin:.5rem 0 0">Vision metadata API for photography teams</h2>
+      <p class="small" style="margin-top:.5rem">
+        Per-tenant API keys, usage metering, upload-only analyze, and optional Stripe billing.
+        Built on the same Grok vision stack as homelab Argus — isolated by tenant.
+      </p>
+      <div class="cta-row">
+        <a class="btn" href="/ui/saas/login">Sign in</a>
+        <a class="btn secondary" href="/saas/status">API status</a>
+      </div>
+    </div>
+    <img src="/static/saas/hero-plated.jpg" alt="Plated food photography" loading="lazy">
+  </div>
+</div>
+
+<div class="feature-grid">
+  <div class="feature">
+    <strong>Tenant isolation</strong>
+    <p class="small">Runs, jobs, and thumbs scoped per tenant. Cross-tenant access returns 404.</p>
+  </div>
+  <div class="feature">
+    <strong>Metered vision</strong>
+    <p class="small">Atomic usage caps — cost and monthly image limits enforced before analyze.</p>
+  </div>
+  <div class="feature">
+    <strong>Upload-only</strong>
+    <p class="small">Tenants upload files; no server path access. Optional S3-backed storage.</p>
+  </div>
+  <div class="feature">
+    <strong>Audit trail</strong>
+    <p class="small">Admin and tenant actions logged for compliance and support.</p>
+  </div>
+</div>
+{% endblock %}

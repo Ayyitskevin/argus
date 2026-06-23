@@ -108,6 +108,21 @@ CREATE TABLE IF NOT EXISTS tenant_usage (
     PRIMARY KEY (tenant_id, period),
     FOREIGN KEY(tenant_id) REFERENCES tenants(id)
 );
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    tenant_id TEXT,
+    actor TEXT,
+    action TEXT NOT NULL,
+    resource TEXT,
+    status TEXT,
+    detail TEXT,
+    ip TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_log(tenant_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action, created_at);
 """
 
 _SCHEMA_LOCK = threading.Lock()
@@ -131,6 +146,10 @@ def _apply_schema(con: sqlite3.Connection) -> None:
         ("jobs", "retry_count", "INTEGER"),
         ("analysis_runs", "tenant_id", "TEXT"),
         ("jobs", "tenant_id", "TEXT"),
+        ("tenants", "stripe_customer_id", "TEXT"),
+        ("tenants", "stripe_subscription_id", "TEXT"),
+        ("tenants", "billing_status", "TEXT"),
+        ("tenants", "plan_tier", "TEXT"),
     ]:
         try:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {typ}")
@@ -741,6 +760,7 @@ def get_client_history_stats(client_id: str) -> dict:
 def _tenant_dict(row: sqlite3.Row | None) -> dict | None:
     if row is None:
         return None
+    keys = row.keys()
     return {
         "id": row["id"],
         "name": row["name"],
@@ -750,6 +770,12 @@ def _tenant_dict(row: sqlite3.Row | None) -> dict | None:
         "monthly_image_cap": row["monthly_image_cap"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
+        "stripe_customer_id": row["stripe_customer_id"] if "stripe_customer_id" in keys else None,
+        "stripe_subscription_id": row["stripe_subscription_id"]
+        if "stripe_subscription_id" in keys
+        else None,
+        "billing_status": row["billing_status"] if "billing_status" in keys else None,
+        "plan_tier": row["plan_tier"] if "plan_tier" in keys else None,
     }
 
 
@@ -1043,3 +1069,63 @@ def global_usage_totals(period: str | None = None) -> dict:
         }
     finally:
         close(con)
+
+
+def insert_audit_event(
+    *,
+    action: str,
+    tenant_id: str | None = None,
+    actor: str | None = None,
+    resource: str | None = None,
+    status: str | None = None,
+    detail: dict | str | None = None,
+    ip: str | None = None,
+) -> int:
+    payload = json.dumps(detail) if isinstance(detail, dict) else detail
+    with tx() as con:
+        cur = con.execute(
+            """INSERT INTO audit_log (tenant_id, actor, action, resource, status, detail, ip)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (tenant_id, actor, action, resource, status, payload, ip),
+        )
+        return int(cur.lastrowid)
+
+
+def list_audit_events(
+    *,
+    tenant_id: str | None = None,
+    limit: int = 50,
+    action: str | None = None,
+) -> list[dict]:
+    con = connect()
+    try:
+        clauses: list[str] = []
+        params: list[object] = []
+        if tenant_id:
+            clauses.append("tenant_id=?")
+            params.append(tenant_id)
+        if action:
+            clauses.append("action=?")
+            params.append(action)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        rows = con.execute(
+            f"SELECT * FROM audit_log {where} ORDER BY id DESC LIMIT ?",
+            params,
+        ).fetchall()
+        out = []
+        for row in rows:
+            item = dict(row)
+            item["detail"] = _json_or(item.get("detail"), item.get("detail"))
+            out.append(item)
+        return out
+    finally:
+        close(con)
+
+
+def cleanup_audit_log(days: int | None = None) -> int:
+    days = days if days is not None else 90
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    with tx() as con:
+        cur = con.execute("DELETE FROM audit_log WHERE created_at < ?", (cutoff,))
+        return cur.rowcount

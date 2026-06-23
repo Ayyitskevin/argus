@@ -7,3 +7,6 @@ pillow
 pydantic
 httpx
 python-dotenv
+
+# Optional: ARGUS_STORAGE_BACKEND=s3
+# boto3
