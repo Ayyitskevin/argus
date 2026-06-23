@@ -44,3 +44,7 @@ See [`plugins/lightroom/README.md`](plugins/lightroom/README.md).
 Capture One uses the same Python stub via [`plugins/capture-one/argus_post_export.sh`](plugins/capture-one/argus_post_export.sh).
 
 Async integrations: `from app.async_client import AsyncArgusClient`.
+
+Review UI supports dark mode (toggle in header; respects `prefers-color-scheme`).
+
+Fleet ops: [`docs/TOKEN-ROTATION.md`](docs/TOKEN-ROTATION.md) · nightly DB backup via `scripts/backup-db.sh` + `ops/argus-backup.timer`.

@@ -3,3 +3,5 @@ asyncio_mode = "auto"
 
 [tool.ruff.lint.per-file-ignores]
 "app/__init__.py" = ["F401"]
+"tests/test_smoke.py" = ["E402"]
+"tests/test_vision_status.py" = ["E402"]

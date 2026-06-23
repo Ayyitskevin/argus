@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="card" style="border-color:#f5d0d0; background:#fff8f8">
+<div class="card card-warn">
   <h2 style="margin-top:0">{{ title or 'Error' }}</h2>
   <p>{{ message }}</p>
   {% if status_code %}

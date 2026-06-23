@@ -39,7 +39,7 @@ def saas_env(monkeypatch):
         con.execute("DELETE FROM tenants")
         con.execute("DELETE FROM photo_analyses")
         con.execute("DELETE FROM analysis_runs")
-    tenant = tenants.create_tenant(
+    tenants.create_tenant(
         "demo",
         name="Demo Tenant",
         vision_provider="grok",
@@ -49,7 +49,7 @@ def saas_env(monkeypatch):
     issued = tenants.issue_api_key("demo", label="test")
     tenant_headers = {"Authorization": f"Bearer {issued['api_key']}"}
 
-    other = tenants.create_tenant("platekit", name="Platekit")
+    tenants.create_tenant("platekit", name="Platekit")
     other_key = tenants.issue_api_key("platekit", label="other")
     other_headers = {"Authorization": f"Bearer {other_key['api_key']}"}
 

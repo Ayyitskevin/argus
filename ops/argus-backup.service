@@ -1,0 +1,11 @@
+[Unit]
+Description=Argus SQLite backup (R22 nightly snapshot)
+After=network.target
+
+[Service]
+Type=oneshot
+User=kevin-lee
+Group=kevin-lee
+EnvironmentFile=-/home/kevin-lee/ai-workspace/argus/.env
+ExecStart=/home/kevin-lee/ai-workspace/argus/scripts/backup-db.sh
+Nice=10

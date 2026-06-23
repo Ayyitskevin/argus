@@ -1,59 +1,120 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>argus / photometa — {{ title or 'Phase 7' }}</title>
+  <title>argus / photometa — {{ title or 'review' }}</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem("argus-theme");
+        if (saved === "dark" || saved === "light") {
+          document.documentElement.setAttribute("data-theme", saved);
+        } else if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      } catch (e) {}
+    })();
+  </script>
   <script src="https://unpkg.com/htmx.org@2.0.4"></script>
   <style>
     :root {
       --bg: #f4f2ec;
       --card: #fff;
+      --card-muted: #faf9f6;
+      --card-ok: #f8fbf9;
+      --card-warn: #fff8f8;
       --ink: #1e1e1e;
       --muted: #666;
       --line: #e4dfd4;
+      --line-input: #ccc;
       --accent: #1a5f3a;
       --accent-soft: #e8f2ec;
       --warn: #8a5a12;
+      --btn: #222;
+      --btn-hover: #444;
+      --btn-secondary-bg: #eee;
+      --btn-secondary-hover: #e4e4e4;
+      --tag-bg: #f0ede6;
+      --pre-bg: #f9f8f4;
+      --thumb-bg: #eee;
+      --kbd-bg: #eee;
+      --shadow: 0 1px 3px rgba(0,0,0,.06);
+      --err: #a11;
+    }
+    html[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #131313;
+      --card: #1c1c1c;
+      --card-muted: #181818;
+      --card-ok: #14271f;
+      --card-warn: #2e1a18;
+      --ink: #e8e6e2;
+      --muted: #8c8a85;
+      --line: #2c2c2c;
+      --line-input: #3a3a3a;
+      --accent: #23b487;
+      --accent-soft: #1c3a2d;
+      --warn: #d8a857;
+      --btn: #e8e6e2;
+      --btn-hover: #fff;
+      --btn-secondary-bg: #242424;
+      --btn-secondary-hover: #2c2c2c;
+      --tag-bg: #242424;
+      --pre-bg: #161616;
+      --thumb-bg: #242424;
+      --kbd-bg: #242424;
+      --shadow: 0 1px 3px rgba(0,0,0,.35);
+      --err: #f0a0a0;
     }
     * { box-sizing: border-box; }
     body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: var(--bg); color: var(--ink); line-height: 1.45; }
     .container { max-width: 1280px; margin: 0 auto; padding: 1.5rem; }
-    .card { background: var(--card); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.06); border: 1px solid var(--line); }
+    .card { background: var(--card); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1rem; box-shadow: var(--shadow); border: 1px solid var(--line); }
+    .card-muted { background: var(--card-muted); }
+    .card-ok { background: var(--card-ok); }
+    .card-warn { background: var(--card-warn); border-color: #f5d0d0; }
+    html[data-theme="dark"] .card-warn { border-color: #4a2c28; }
     .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; gap: 1rem; flex-wrap: wrap; }
     .small { font-size: .82rem; color: var(--muted); }
     .nav { margin-bottom: .75rem; }
     .nav a { color: var(--accent); text-decoration: none; }
     .nav a:hover { text-decoration: underline; }
     form { margin: .75rem 0; }
-    input[type=text], input[type=file], input[type=number], select {
-      padding: .45rem .55rem; font-size: .95rem; border: 1px solid #ccc; border-radius: 6px; background: #fff;
+    input[type=text], input[type=password], input[type=file], input[type=number], select {
+      padding: .45rem .55rem; font-size: .95rem; border: 1px solid var(--line-input); border-radius: 6px;
+      background: var(--card); color: var(--ink);
     }
     button, .btn {
-      background: #222; color: white; border: none; border-radius: 6px; padding: .45rem .85rem;
+      background: var(--btn); color: var(--bg); border: none; border-radius: 6px; padding: .45rem .85rem;
       cursor: pointer; font-size: .9rem; text-decoration: none; display: inline-block;
     }
-    button:hover, .btn:hover { background: #444; }
-    button.secondary, .btn.secondary { background: #eee; color: #222; border: 1px solid #ccc; }
-    button.secondary:hover { background: #e4e4e4; }
-    .tag { display: inline-block; background: #f0ede6; padding: 2px 7px; margin: 2px 4px 2px 0; border-radius: 4px; font-size: .74rem; }
+    html[data-theme="dark"] button, html[data-theme="dark"] .btn { color: #131313; }
+    button:hover, .btn:hover { background: var(--btn-hover); }
+    button.secondary, .btn.secondary {
+      background: var(--btn-secondary-bg); color: var(--ink); border: 1px solid var(--line-input);
+    }
+    button.secondary:hover { background: var(--btn-secondary-hover); }
+    .theme-toggle { background: var(--btn-secondary-bg); color: var(--ink); border: 1px solid var(--line-input); padding: .3rem .55rem; font-size: .78rem; border-radius: 6px; cursor: pointer; }
+    .tag { display: inline-block; background: var(--tag-bg); padding: 2px 7px; margin: 2px 4px 2px 0; border-radius: 4px; font-size: .74rem; }
     .tag.promote { background: var(--accent-soft); color: var(--accent); cursor: pointer; }
     .score { font-weight: 600; color: var(--accent); }
-    pre { background: #f9f8f4; padding: .5rem; overflow: auto; font-size: .75rem; border-radius: 6px; }
+    pre { background: var(--pre-bg); padding: .5rem; overflow: auto; font-size: .75rem; border-radius: 6px; color: var(--ink); }
     .toolbar { display: flex; flex-wrap: wrap; gap: .6rem; align-items: end; margin-bottom: .75rem; }
     .toolbar label { display: flex; flex-direction: column; gap: .2rem; font-size: .78rem; color: var(--muted); }
     .hero-strip { display: flex; gap: .75rem; overflow-x: auto; padding-bottom: .25rem; }
     .hero-card {
-      flex: 0 0 160px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff;
+      flex: 0 0 160px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--card);
     }
-    .hero-card img { width: 100%; height: 110px; object-fit: cover; display: block; background: #eee; }
+    .hero-card img { width: 100%; height: 110px; object-fit: cover; display: block; background: var(--thumb-bg); }
     .hero-card .hero-meta { padding: .4rem .5rem; font-size: .75rem; }
     .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
     .photo {
-      border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff;
+      border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--card);
       display: grid; grid-template-columns: 120px 1fr;
     }
-    .photo-thumb { background: #eee; min-height: 120px; }
+    .photo-thumb { background: var(--thumb-bg); min-height: 120px; }
     .photo-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; min-height: 120px; }
     .photo-body { padding: .65rem .75rem; font-size: .86rem; }
     .photo-title { font-weight: 600; font-size: .82rem; margin-bottom: .25rem; word-break: break-all; }
@@ -62,28 +123,59 @@
     .edit-row input[type=number] { width: 72px; font-size: .82rem; }
     .htmx-indicator { opacity: .5; }
     .badge { background: var(--accent-soft); color: var(--accent); padding: 2px 8px; border-radius: 999px; font-size: .72rem; font-weight: 600; }
+    .badge-err { background: #fde8e8; color: var(--err); }
+    html[data-theme="dark"] .badge-err { background: #2e1a18; }
     .status-ok { color: var(--accent); font-size: .78rem; }
-    .status-err { color: #a11; font-size: .78rem; }
+    .status-err { color: var(--err); font-size: .78rem; }
     .photo-focus { outline: 2px solid var(--accent); outline-offset: 2px; }
-    kbd { font-size: .72rem; background: #eee; border: 1px solid #ccc; border-radius: 3px; padding: 1px 4px; }
+    kbd { font-size: .72rem; background: var(--kbd-bg); border: 1px solid var(--line-input); border-radius: 3px; padding: 1px 4px; }
+    .vision-ready { border-color: var(--accent-soft); background: var(--card-ok); }
+    .vision-down { border-color: #f5d0d0; background: var(--card-warn); }
+    html[data-theme="dark"] .vision-down { border-color: #4a2c28; }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="header">
       <h1 style="margin:0">argus <span class="small">/ photometa</span></h1>
-      <div class="small">
-        {{ model or '—' }}
-        {% if vision %}· {{ vision.provider }}/{{ vision.backend }}{% endif %}
-        · <a href="/healthz">health</a>
-        · <a href="/vision/status">vision</a>
-        · <a href="/ui/jobs">jobs</a>
-        · <a href="/ui/saas">cloud</a>
-        · <a href="/">home</a>
+      <div class="small" style="display:flex; align-items:center; gap:.75rem; flex-wrap:wrap">
+        <button type="button" class="theme-toggle" id="argus-theme-toggle" aria-label="Toggle dark mode">☾ Dark</button>
+        <span>
+          {{ model or '—' }}
+          {% if vision %}· {{ vision.provider }}/{{ vision.backend }}{% endif %}
+          · <a href="/healthz">health</a>
+          · <a href="/vision/status">vision</a>
+          · <a href="/ui/jobs">jobs</a>
+          · <a href="/ui/saas">cloud</a>
+          · <a href="/">home</a>
+        </span>
       </div>
     </div>
     {% block content %}{% endblock %}
-    <p class="small" style="margin-top:2rem">Phase 7 — review UI · <a href="https://github.com/Ayyitskevin/argus" target="_blank">GitHub</a></p>
+    <p class="small" style="margin-top:2rem">Review UI · <a href="https://github.com/Ayyitskevin/argus" target="_blank">GitHub</a></p>
   </div>
+  <script>
+    (function () {
+      var btn = document.getElementById("argus-theme-toggle");
+      if (!btn) return;
+      function syncLabel() {
+        var dark = document.documentElement.getAttribute("data-theme") === "dark";
+        btn.textContent = dark ? "☀ Light" : "☾ Dark";
+        btn.setAttribute("aria-pressed", dark ? "true" : "false");
+      }
+      syncLabel();
+      btn.addEventListener("click", function () {
+        var dark = document.documentElement.getAttribute("data-theme") === "dark";
+        if (dark) {
+          document.documentElement.removeAttribute("data-theme");
+          try { localStorage.setItem("argus-theme", "light"); } catch (e) {}
+        } else {
+          document.documentElement.setAttribute("data-theme", "dark");
+          try { localStorage.setItem("argus-theme", "dark"); } catch (e) {}
+        }
+        syncLabel();
+      });
+    })();
+  </script>
 </body>
 </html>

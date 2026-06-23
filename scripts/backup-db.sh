@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Snapshot argus SQLite DB (safe for WAL mode via sqlite3 .backup).
+# Install nightly timer: sudo cp ops/argus-backup.* /etc/systemd/system/ && sudo systemctl enable --now argus-backup.timer
 set -euo pipefail
 
-DATA_DIR="${ARGUS_DATA_DIR:-$HOME/ai-workspace/argus/data}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+DATA_DIR="${ARGUS_DATA_DIR:-$ROOT/data}"
 DB="${ARGUS_DB_PATH:-$DATA_DIR/argus.db}"
 BACKUP_DIR="${ARGUS_BACKUP_DIR:-$DATA_DIR/backups}"
+RETAIN="${ARGUS_BACKUP_RETAIN:-14}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUT="$BACKUP_DIR/argus-${STAMP}.db"
 
@@ -13,9 +16,19 @@ if [[ ! -f "$DB" ]]; then
   exit 1
 fi
 
+if ! command -v sqlite3 >/dev/null; then
+  echo "sqlite3 required for online backup" >&2
+  exit 1
+fi
+
 mkdir -p "$BACKUP_DIR"
 sqlite3 "$DB" ".backup '$OUT'"
-echo "Backup written: $OUT"
+BYTES="$(wc -c < "$OUT" | tr -d ' ')"
+echo "Backup written: $OUT (${BYTES} bytes)"
 
-# Keep last 14 backups
-ls -1t "$BACKUP_DIR"/argus-*.db 2>/dev/null | tail -n +15 | xargs -r rm -f
+# Keep last N backups (newest first)
+mapfile -t OLD < <(ls -1t "$BACKUP_DIR"/argus-*.db 2>/dev/null | tail -n +$((RETAIN + 1)) || true)
+if ((${#OLD[@]})); then
+  rm -f "${OLD[@]}"
+  echo "Pruned ${#OLD[@]} old backup(s); retaining ${RETAIN}"
+fi

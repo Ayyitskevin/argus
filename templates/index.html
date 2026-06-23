@@ -2,7 +2,7 @@
 
 {% block content %}
 {% if auth_required %}
-<div class="card" style="background:#faf9f6">
+<div class="card card-muted">
   <h3 style="margin-top:0">API token</h3>
   <p class="small">Required for analyze and corrections when <code>ARGUS_API_TOKEN</code> is set. Stored in a browser cookie for 30 days.</p>
   <form action="/ui/token" method="post" class="toolbar">
@@ -20,7 +20,7 @@
 {% endif %}
 
 {% if vision %}
-<div class="card" style="border-color: {% if vision.ready %}var(--accent-soft){% else %}#f5d0d0{% endif %}; background: {% if vision.ready %}#f8fbf9{% else %}#fff8f8{% endif %};">
+<div class="card {% if vision.ready %}vision-ready{% else %}vision-down{% endif %}">
   <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; flex-wrap:wrap;">
     <div>
       <h2 style="margin:0 0 .35rem 0; font-size:1.05rem">Vision status</h2>
@@ -29,7 +29,7 @@
     <div class="small" style="text-align:right">
       <span class="badge">{{ vision.provider }}</span>
       <span class="badge">{{ vision.backend }}</span>
-      {% if vision.api_key_configured %}<span class="badge">key ✓</span>{% else %}<span class="badge" style="background:#fde8e8;color:#a11">no key</span>{% endif %}
+      {% if vision.api_key_configured %}<span class="badge">key ✓</span>{% else %}<span class="badge badge-err">no key</span>{% endif %}
     </div>
   </div>
   <div class="toolbar" style="margin-top:.75rem; margin-bottom:0">
