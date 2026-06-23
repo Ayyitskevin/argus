@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
-from . import config, db, metrics, service
+from . import config, db, metrics, mise_client, service
 from .auth import UI_TOKEN_COOKIE, require_admin, require_bearer, resolve_auth, verify_api_access
 from .auth_context import AuthContext
 from . import metering, tenants
@@ -243,6 +243,20 @@ def get_metrics_prometheus():
 @app.get("/clients/{client_id}/history", response_class=JSONResponse)
 def client_history(client_id: str, ctx: AuthContext = Depends(require_bearer)):
     return db.get_client_history_stats(client_id, tenant_id=tenant_scope(ctx))
+
+
+@app.get("/mise/galleries", response_class=JSONResponse)
+def list_mise_galleries(
+    published: bool = Query(True),
+    ctx: AuthContext = Depends(require_bearer),
+):
+    """Proxy Mise's published gallery index for operators and automation."""
+    if not mise_client.is_enabled():
+        return error("mise api not configured (ARGUS_MISE_URL + ARGUS_MISE_API_TOKEN)", 503)
+    try:
+        return mise_client.list_galleries(published=published)
+    except mise_client.MiseClientError as exc:
+        return error(str(exc), 502)
 
 
 @app.get("/thumb/{photo_id}")

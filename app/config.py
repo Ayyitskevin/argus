@@ -126,6 +126,13 @@ STRIPE_BILLING_PORTAL_RETURN_URL = os.environ.get(
 # If unset, caller must pass explicit folder path to the originals.
 MISE_MEDIA_ROOT = Path(os.environ.get("ARGUS_MISE_MEDIA_ROOT", "")) if os.environ.get("ARGUS_MISE_MEDIA_ROOT") else None
 
+# Phase 6 slice 1: read-only Mise gallery index (GET /api/galleries on flow).
+# BOTH url+token arm path resolution via originals_path when ARGUS_MISE_MEDIA_ROOT
+# is unset. Use the same bearer as MISE_ARGUS_TOKEN on the Mise side.
+MISE_URL = os.environ.get("ARGUS_MISE_URL", "").rstrip("/")
+MISE_API_TOKEN = os.environ.get("ARGUS_MISE_API_TOKEN", "")
+MISE_TIMEOUT = int(os.environ.get("ARGUS_MISE_TIMEOUT", "10"))
+
 # Phase 11 hardening — in SaaS mode, folder/path analysis is confined to these
 # roots so a tenant API key can't make the server read arbitrary local files.
 # Comma-separated. Homelab (non-SaaS) is unrestricted (the operator's own box).

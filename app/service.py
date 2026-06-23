@@ -95,6 +95,8 @@ def resolve_mise_folder(
     mise_project_id: int | None = None,
 ) -> tuple[Path | None, dict, str | None]:
     """Resolve an explicit folder or a Mise gallery/project convention."""
+    from . import mise_client
+
     mise_info: dict[str, int] = {}
     if mise_gallery_id is not None:
         mise_info["gallery_id"] = mise_gallery_id
@@ -106,6 +108,13 @@ def resolve_mise_folder(
         effective = str(config.MISE_MEDIA_ROOT / str(mise_gallery_id) / "original")
     if not effective and mise_project_id is not None and config.MISE_MEDIA_ROOT:
         effective = str(config.MISE_MEDIA_ROOT / f"project-{mise_project_id}" / "original")
+    if not effective and mise_gallery_id is not None and mise_client.is_enabled():
+        try:
+            row = mise_client.get_gallery(mise_gallery_id)
+        except mise_client.MiseClientError:
+            row = None
+        if row and row.get("originals_path"):
+            effective = str(row["originals_path"])
     if not effective:
         return None, mise_info, None
 
@@ -557,7 +566,7 @@ def perform_folder_analyze(
     )
     if path is None:
         raise AnalyzeError(
-            "folder (or mise_gallery_id with ARGUS_MISE_MEDIA_ROOT) required",
+            "folder (or mise_gallery_id with ARGUS_MISE_MEDIA_ROOT or ARGUS_MISE_URL) required",
             400,
         )
     if not path.is_dir():
