@@ -161,6 +161,7 @@ def _apply_schema(con: sqlite3.Connection) -> None:
         ("jobs", "retry_count", "INTEGER"),
         ("analysis_runs", "tenant_id", "TEXT"),
         ("jobs", "tenant_id", "TEXT"),
+        ("preferences", "tenant_id", "TEXT"),
         ("tenants", "stripe_customer_id", "TEXT"),
         ("tenants", "stripe_subscription_id", "TEXT"),
         ("tenants", "billing_status", "TEXT"),
@@ -168,8 +169,11 @@ def _apply_schema(con: sqlite3.Connection) -> None:
     ]:
         try:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {typ}")
-        except sqlite3.OperationalError:
-            pass
+        except sqlite3.OperationalError as exc:
+            # Only a re-add of an existing column is expected here; anything else
+            # (e.g. a typo'd table) must fail loud rather than be swallowed.
+            if "duplicate column name" not in str(exc).lower():
+                raise
     con.commit()
 
 
@@ -650,21 +654,42 @@ def purge_jobs(
         return int(cur.rowcount)
 
 
-def get_preferences(client_id: Optional[str] = None, style: Optional[str] = None) -> dict:
+def get_preferences(
+    client_id: Optional[str] = None,
+    style: Optional[str] = None,
+    *,
+    tenant_id: str | None = None,
+) -> dict:
     con = connect()
     try:
         if client_id:
-            row = con.execute(
-                "SELECT prefs FROM preferences WHERE client_id=? ORDER BY updated_at DESC LIMIT 1",
-                (client_id,),
-            ).fetchone()
+            if tenant_id:
+                row = con.execute(
+                    "SELECT prefs FROM preferences WHERE client_id=? AND tenant_id=?"
+                    " ORDER BY updated_at DESC LIMIT 1",
+                    (client_id, tenant_id),
+                ).fetchone()
+            else:
+                row = con.execute(
+                    "SELECT prefs FROM preferences WHERE client_id=?"
+                    " ORDER BY updated_at DESC LIMIT 1",
+                    (client_id,),
+                ).fetchone()
             if row:
                 return _json_or(row["prefs"], {})
         if style:
-            row = con.execute(
-                "SELECT prefs FROM preferences WHERE style=? ORDER BY updated_at DESC LIMIT 1",
-                (style,),
-            ).fetchone()
+            if tenant_id:
+                row = con.execute(
+                    "SELECT prefs FROM preferences WHERE style=? AND tenant_id=?"
+                    " ORDER BY updated_at DESC LIMIT 1",
+                    (style, tenant_id),
+                ).fetchone()
+            else:
+                row = con.execute(
+                    "SELECT prefs FROM preferences WHERE style=?"
+                    " ORDER BY updated_at DESC LIMIT 1",
+                    (style,),
+                ).fetchone()
             if row:
                 return _json_or(row["prefs"], {})
         return {}
@@ -672,17 +697,30 @@ def get_preferences(client_id: Optional[str] = None, style: Optional[str] = None
         close(con)
 
 
-def set_preferences(client_id: str, prefs: dict, style: Optional[str] = None) -> int:
+def set_preferences(
+    client_id: str,
+    prefs: dict,
+    style: Optional[str] = None,
+    *,
+    tenant_id: str | None = None,
+) -> int:
     prefs_json = json.dumps(prefs or {})
     with tx() as con:
-        con.execute(
-            "DELETE FROM preferences WHERE client_id=? AND (style IS ? OR style=?)",
-            (client_id, style, style),
-        )
+        if tenant_id:
+            con.execute(
+                "DELETE FROM preferences WHERE client_id=? AND (style IS ? OR style=?)"
+                " AND tenant_id=?",
+                (client_id, style, style, tenant_id),
+            )
+        else:
+            con.execute(
+                "DELETE FROM preferences WHERE client_id=? AND (style IS ? OR style=?)",
+                (client_id, style, style),
+            )
         cur = con.execute(
-            "INSERT INTO preferences (client_id, style, prefs, updated_at)"
-            " VALUES (?, ?, ?, datetime('now'))",
-            (client_id, style, prefs_json),
+            "INSERT INTO preferences (client_id, style, prefs, tenant_id, updated_at)"
+            " VALUES (?, ?, ?, ?, datetime('now'))",
+            (client_id, style, prefs_json, tenant_id),
         )
         return int(cur.lastrowid)
 
@@ -691,15 +729,22 @@ def _client_source_pattern(client_id: str) -> str:
     return f"%client:{client_id}%"
 
 
-def get_client_history_stats(client_id: str) -> dict:
+def get_client_history_stats(client_id: str, *, tenant_id: str | None = None) -> dict:
     """Aggregate prior runs and photo analyses for history-based prefs (Phase 4)."""
     pattern = _client_source_pattern(client_id)
     con = connect()
     try:
-        run_rows = con.execute(
-            "SELECT id FROM analysis_runs WHERE source LIKE ? ORDER BY id DESC LIMIT 50",
-            (pattern,),
-        ).fetchall()
+        if tenant_id:
+            run_rows = con.execute(
+                "SELECT id FROM analysis_runs WHERE source LIKE ? AND tenant_id=?"
+                " ORDER BY id DESC LIMIT 50",
+                (pattern, tenant_id),
+            ).fetchall()
+        else:
+            run_rows = con.execute(
+                "SELECT id FROM analysis_runs WHERE source LIKE ? ORDER BY id DESC LIMIT 50",
+                (pattern,),
+            ).fetchall()
         num_runs = len(run_rows)
         if not run_rows:
             return {

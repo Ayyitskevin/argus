@@ -240,9 +240,9 @@ def get_metrics_prometheus():
     )
 
 
-@app.get("/clients/{client_id}/history", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
-def client_history(client_id: str):
-    return db.get_client_history_stats(client_id)
+@app.get("/clients/{client_id}/history", response_class=JSONResponse)
+def client_history(client_id: str, ctx: AuthContext = Depends(require_bearer)):
+    return db.get_client_history_stats(client_id, tenant_id=tenant_scope(ctx))
 
 
 @app.get("/thumb/{photo_id}")
@@ -259,9 +259,9 @@ def get_thumb(photo_id: int, request: Request):
     try:
         thumb_bytes = make_thumbnail(path)
         return StreamingResponse(io.BytesIO(thumb_bytes), media_type="image/jpeg")
-    except Exception as exc:
+    except Exception:
         log.exception("failed to generate thumb for photo %s", photo_id)
-        return error(f"thumb error: {exc}", 500)
+        return error("failed to generate thumbnail", 500)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1024,21 +1024,31 @@ def get_job(job_id: str, request: Request):
 
 
 @app.get("/preferences", response_class=JSONResponse)
-def get_prefs(client_id: Optional[str] = None, style: Optional[str] = None):
-    return {"client_id": client_id, "style": style, "prefs": db.get_preferences(client_id, style)}
+def get_prefs(
+    client_id: Optional[str] = None,
+    style: Optional[str] = None,
+    ctx: AuthContext = Depends(require_bearer),
+):
+    scope = tenant_scope(ctx)
+    return {
+        "client_id": client_id,
+        "style": style,
+        "prefs": db.get_preferences(client_id, style, tenant_id=scope),
+    }
 
 
-@app.post("/preferences", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
+@app.post("/preferences", response_class=JSONResponse)
 def set_prefs(
     client_id: str = Form(...),
     prefs: str = Form(...),
     style: Optional[str] = Form(None),
+    ctx: AuthContext = Depends(require_bearer),
 ):
     try:
         prefs_dict = json.loads(prefs)
     except Exception as exc:
         return error(f"invalid prefs json: {exc}", 400)
-    pref_id = db.set_preferences(client_id, prefs_dict, style)
+    pref_id = db.set_preferences(client_id, prefs_dict, style, tenant_id=tenant_scope(ctx))
     metrics.inc("preferences_writes")
     return {"ok": True, "id": pref_id, "client_id": client_id, "style": style, "prefs": prefs_dict}
 
