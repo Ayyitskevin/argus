@@ -5,6 +5,9 @@ Named for Argus (the many-eyed giant).
 
 See [`docs/PHASE-0.md`](docs/PHASE-0.md) for the initial scope and what we're proving first.
 
+**Dev dogfood standard:** Grok generates test photos → Qwen (`qwen3-vl:32b`) analyzes via Argus.
+See [`docs/DOGFOOD-STANDARD.md`](docs/DOGFOOD-STANDARD.md). CI stays mock-only.
+
 This is the shared vision/metadata layer for the photography AI suite (feeds mnemosyne/albumwright, platekit, etc.).
 
 ## Quickstart (Phase 0 — local dogfood)
