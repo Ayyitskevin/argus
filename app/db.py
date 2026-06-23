@@ -184,6 +184,18 @@ CREATE TABLE IF NOT EXISTS cap_alert_log (
     PRIMARY KEY (tenant_id, period, alert_kind),
     FOREIGN KEY(tenant_id) REFERENCES tenants(id)
 );
+
+CREATE TABLE IF NOT EXISTS mise_analyze_ledger (
+    dedup_key TEXT PRIMARY KEY,
+    mise_gallery_id INTEGER NOT NULL,
+    client_id TEXT,
+    run_id INTEGER,
+    job_id TEXT,
+    status TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_mise_ledger_gallery ON mise_analyze_ledger(mise_gallery_id);
 """
 
 _SCHEMA_LOCK = threading.Lock()
@@ -1304,4 +1316,45 @@ def record_cap_alert(tenant_id: str, period: str, alert_kind: str) -> None:
             """INSERT OR IGNORE INTO cap_alert_log (tenant_id, period, alert_kind)
                VALUES (?, ?, ?)""",
             (tenant_id, period, alert_kind),
+        )
+
+
+def mise_dedup_key(mise_gallery_id: int, client_id: str | None = None) -> str:
+    if client_id:
+        return f"mise:gallery:{mise_gallery_id}:client:{client_id}"
+    return f"mise:gallery:{mise_gallery_id}"
+
+
+def get_mise_analyze_ledger(dedup_key: str) -> dict | None:
+    con = connect()
+    try:
+        row = con.execute(
+            "SELECT * FROM mise_analyze_ledger WHERE dedup_key=?",
+            (dedup_key,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        close(con)
+
+
+def upsert_mise_analyze_ledger(
+    *,
+    dedup_key: str,
+    mise_gallery_id: int,
+    client_id: str | None,
+    status: str,
+    run_id: int | None = None,
+    job_id: str | None = None,
+) -> None:
+    with tx() as con:
+        con.execute(
+            """INSERT INTO mise_analyze_ledger
+               (dedup_key, mise_gallery_id, client_id, run_id, job_id, status, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(dedup_key) DO UPDATE SET
+                 run_id=COALESCE(excluded.run_id, mise_analyze_ledger.run_id),
+                 job_id=COALESCE(excluded.job_id, mise_analyze_ledger.job_id),
+                 status=excluded.status,
+                 updated_at=datetime('now')""",
+            (dedup_key, mise_gallery_id, client_id, run_id, job_id, status),
         )

@@ -93,6 +93,45 @@ def test_resolve_mise_folder_via_api_originals_path(monkeypatch, tmp_path):
     assert attempted == str(originals)
 
 
+def test_mise_dedup_returns_existing_job(monkeypatch, tmp_path):
+    from app import mise_dedup
+
+    originals = tmp_path / "media" / "5" / "original"
+    originals.mkdir(parents=True)
+    Image.new("RGB", (40, 30), (10, 20, 30)).save(originals / "a.jpg")
+    monkeypatch.setattr(config, "QUEUE_ENABLED", True)
+    mise_dedup.record_queued(5, "client-a", "job-existing")
+
+    with patch("app.service.resolve_mise_folder") as resolve:
+        resolve.return_value = (originals.resolve(), {"gallery_id": 5}, str(originals))
+        with patch("app.service.queue_accepting_jobs", return_value=(True, None)):
+            with patch("app.db.create_job") as create_job:
+                create_job.side_effect = AssertionError("should not create a second job")
+                out = service.perform_folder_analyze(mise_gallery_id=5, client_id="client-a")
+
+    assert out["deduped"] is True
+    assert out["job_id"] == "job-existing"
+
+
+def test_mise_dedup_skipped_when_requested(monkeypatch, tmp_path):
+    from app import mise_dedup
+
+    originals = tmp_path / "media" / "6" / "original"
+    originals.mkdir(parents=True)
+    monkeypatch.setattr(config, "QUEUE_ENABLED", True)
+    mise_dedup.record_queued(6, None, "job-old")
+
+    with patch("app.service.resolve_mise_folder") as resolve:
+        resolve.return_value = (originals.resolve(), {"gallery_id": 6}, str(originals))
+        with patch("app.service.queue_accepting_jobs", return_value=(True, None)):
+            with patch("app.db.create_job", return_value="job-new") as create_job:
+                out = service.perform_folder_analyze(
+                    mise_gallery_id=6, skip_dedup=True,
+                )
+    assert create_job.called
+    assert out["job_id"] == "job-new"
+
+
 def test_resolve_mise_folder_still_uses_media_root(monkeypatch, tmp_path):
     root = tmp_path / "mise-media"
     gallery = root / "9" / "original"

@@ -382,6 +382,7 @@ def analyze_folder_endpoint(
     client_id: Optional[str] = Form(None),
     recursive: bool = Form(False),
     callback_url: Optional[str] = Form(None),
+    skip_dedup: bool = Form(False),
     ctx: AuthContext = Depends(require_bearer),
 ):
     try:
@@ -409,6 +410,7 @@ def analyze_folder_endpoint(
             recursive=recursive,
             callback_url=callback_url,
             tenant=ctx.tenant,
+            skip_dedup=skip_dedup,
         )
     except service.AnalyzeError as exc:
         return error(exc.message, exc.status_code)

@@ -5,7 +5,7 @@ import logging
 import threading
 from pathlib import Path
 
-from . import config, db, metrics, service
+from . import config, db, metrics, mise_dedup, service
 from .callbacks import fire_job_callback
 
 log = logging.getLogger("argus.jobs")
@@ -34,6 +34,10 @@ def _fail_job(job_id: str, error_msg: str) -> None:
     metrics.inc("jobs_dead_letter")
     metrics.inc("jobs_failed")
     log.error("Job %s moved to dead_letter: %s", job_id, error_msg)
+    if job:
+        gid = mise_dedup.parse_mise_gallery_id(job.get("source"))
+        if gid is not None:
+            mise_dedup.record_failed(gid, job.get("client_id"))
     _notify(job_id, status="dead_letter", error=error_msg)
 
 
@@ -88,6 +92,9 @@ def process_job(job: dict) -> None:
             result=job_result,
             error=None,
         )
+        gid = mise_dedup.parse_mise_gallery_id(job.get("source"))
+        if gid is not None:
+            mise_dedup.record_done(gid, job.get("client_id"), int(result["run_id"]))
         metrics.inc("jobs_completed")
         metrics.inc("photos_analyzed", result["count"])
         log.info("Job %s completed -> run %s", job_id, result["run_id"])

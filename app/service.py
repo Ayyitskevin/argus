@@ -10,6 +10,7 @@ from .auth_context import get_tenant_id
 from .metering import MeteringError
 from .sidecars import write_sidecar
 from .callbacks import is_allowed_callback_url
+from . import mise_dedup
 
 log = logging.getLogger("argus.service")
 
@@ -557,8 +558,14 @@ def perform_folder_analyze(
     recursive: bool = False,
     callback_url: str | None = None,
     tenant: dict | None = None,
+    skip_dedup: bool = False,
 ) -> dict:
     """Shared folder analyze for JSON API and browser UI flows."""
+    if mise_gallery_id is not None and not skip_dedup:
+        existing = mise_dedup.lookup(mise_gallery_id, client_id)
+        if existing:
+            return existing
+
     path, mise_info, attempted = resolve_mise_folder(
         folder=folder,
         mise_gallery_id=mise_gallery_id,
@@ -599,6 +606,8 @@ def perform_folder_analyze(
             recursive=recursive,
             tenant_id=tenant["id"] if tenant else None,
         )
+        if mise_gallery_id is not None:
+            mise_dedup.record_queued(mise_gallery_id, client_id, job_id)
         out: dict[str, Any] = {
             "mode": "queued",
             "job_id": job_id,
@@ -637,4 +646,6 @@ def perform_folder_analyze(
     elif sidecar_dir:
         result["sidecar_dir"] = sidecar_dir
     result["mode"] = "sync"
+    if mise_gallery_id is not None and result.get("run_id"):
+        mise_dedup.record_done(mise_gallery_id, client_id, int(result["run_id"]))
     return result
