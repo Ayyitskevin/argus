@@ -1,11 +1,7 @@
 """Vision prompt helpers — shot type normalization and examples loader."""
 
 import json
-import os
-import tempfile
-from pathlib import Path
 
-import pytest
 
 from app.vision import load_prompt_examples, normalize_shot_type, system_prompt
 

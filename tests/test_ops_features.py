@@ -1,10 +1,8 @@
 """Ops batch — healthz, cap alerts, compare UI, webhook idempotency."""
 
-import json
 import os
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient

@@ -14,7 +14,7 @@ from typing import Callable
 import httpx
 
 from . import config, vision
-from .grok_client import GrokVisionError, chat_vision, message_json_text, parse_usage
+from .grok_client import chat_vision, parse_usage
 from .vision import (
     AnalysisResult,
     Culling,

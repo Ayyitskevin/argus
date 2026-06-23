@@ -1,6 +1,5 @@
 """Phase 7 tests — review UI helpers, PATCH corrections, run compare (mock only)."""
 
-import json
 import os
 import tempfile
 from pathlib import Path

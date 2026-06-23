@@ -23,7 +23,6 @@ from . import config, db, metrics, mise_client, service
 from .auth import UI_TOKEN_COOKIE, require_admin, require_bearer, resolve_auth, verify_api_access
 from .auth_context import AuthContext
 from . import metering, tenants
-from .metering import MeteringError
 from .tenants import TenantError
 from .callbacks import is_allowed_callback_url
 from .jobs import JobWorker, retry_job

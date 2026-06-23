@@ -8,7 +8,6 @@ _TMP = tempfile.mkdtemp(prefix="argus-vision-status-")
 os.environ["ARGUS_DATA_DIR"] = _TMP
 os.environ["ARGUS_QUEUE_ENABLED"] = "false"
 
-import pytest
 from fastapi.testclient import TestClient
 
 from app import config, metrics

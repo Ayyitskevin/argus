@@ -1,6 +1,5 @@
 """Grok client tests — httpx mocked, no real API calls."""
 
-import json
 
 import httpx
 import pytest
