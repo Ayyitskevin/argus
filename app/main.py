@@ -10,12 +10,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from . import config, db, service
+from . import config, db, metrics, service
+from .auth import require_bearer
 from .jobs import JobWorker
 from .sidecars import write_sidecar
 from .vision import make_thumbnail
@@ -43,7 +44,7 @@ async def lifespan(app: FastAPI):
         worker.stop()
 
 
-app = FastAPI(title="argus / photometa", version="phase2", lifespan=lifespan)
+app = FastAPI(title="argus / photometa", version="phase4", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -61,9 +62,20 @@ def healthz():
         "cloud_backend": config.CLOUD_BACKEND,
         "cloud_cost_per_image": config.CLOUD_COST_PER_IMAGE,
         "tailscale_hint": config.TAILSCALE_HINT,
+        "auth_enabled": bool(config.API_TOKEN),
         "model": config.VISION_MODEL,
         "ollama": config.OLLAMA_HOST,
     }
+
+
+@app.get("/metrics", response_class=JSONResponse)
+def get_metrics():
+    return metrics.snapshot()
+
+
+@app.get("/clients/{client_id}/history", response_class=JSONResponse)
+def client_history(client_id: str):
+    return db.get_client_history_stats(client_id)
 
 
 @app.get("/thumb/{photo_id}")
@@ -94,7 +106,7 @@ def home(request: Request):
     )
 
 
-@app.post("/analyze", response_class=JSONResponse)
+@app.post("/analyze", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
 async def analyze_single(
     file: Optional[UploadFile] = File(None),
     path: Optional[str] = Form(None),
@@ -123,6 +135,8 @@ async def analyze_single(
             model=model,
             client_id=client_id,
         )
+        metrics.inc("analyze_single")
+        metrics.inc("photos_analyzed")
         if write_sidecar:
             if tmp_path is None:
                 written = write_sidecar(str(image_path), out, sidecar_dir=sidecar_dir)
@@ -135,7 +149,7 @@ async def analyze_single(
             tmp_path.unlink(missing_ok=True)
 
 
-@app.post("/analyze-folder", response_class=JSONResponse)
+@app.post("/analyze-folder", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
 def analyze_folder_endpoint(
     folder: Optional[str] = Form(None),
     model: Optional[str] = Form(None),
@@ -190,6 +204,8 @@ def analyze_folder_endpoint(
         sidecar_dir=sidecar_dir,
         client_id=client_id,
     )
+    metrics.inc("analyze_folder")
+    metrics.inc("photos_analyzed", result["count"])
     if mise_info:
         result["mise"] = mise_info
     if not write_sidecars:
@@ -199,7 +215,7 @@ def analyze_folder_endpoint(
     return result
 
 
-@app.post("/import/mise-project", response_class=JSONResponse)
+@app.post("/import/mise-project", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
 def import_mise_project(
     mise_project_id: int = Form(...),
     gallery_path: Optional[str] = Form(None),
@@ -258,6 +274,8 @@ def import_mise_project(
         sidecar_dir=sidecar_dir,
         client_id=client_id,
     )
+    metrics.inc("analyze_folder")
+    metrics.inc("photos_analyzed", result["count"])
     result["mise_project_id"] = mise_project_id
     result["mise_gallery_id"] = mise_gallery_id
     if service.simulated_cloud_cost and config.CLOUD_BACKEND != "disabled":
@@ -347,7 +365,11 @@ def photo_sidecar(run_id: int, photo_id: int):
     return error("photo not found", 404)
 
 
-@app.post("/runs/{run_id}/write-sidecars", response_class=JSONResponse)
+@app.post(
+    "/runs/{run_id}/write-sidecars",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_bearer)],
+)
 def write_sidecars_for_run(run_id: int, sidecar_dir: Optional[str] = Form(None)):
     data = db.get_full_run(run_id)
     if not data:
@@ -403,7 +425,7 @@ def get_prefs(client_id: Optional[str] = None, style: Optional[str] = None):
     return {"client_id": client_id, "style": style, "prefs": db.get_preferences(client_id, style)}
 
 
-@app.post("/preferences", response_class=JSONResponse)
+@app.post("/preferences", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
 def set_prefs(
     client_id: str = Form(...),
     prefs: str = Form(...),
@@ -414,6 +436,7 @@ def set_prefs(
     except Exception as exc:
         return error(f"invalid prefs json: {exc}", 400)
     pref_id = db.set_preferences(client_id, prefs_dict, style)
+    metrics.inc("preferences_writes")
     return {"ok": True, "id": pref_id, "client_id": client_id, "style": style, "prefs": prefs_dict}
 
 

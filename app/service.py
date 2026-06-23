@@ -19,12 +19,18 @@ def result_to_dict(result: Any) -> dict:
 
 
 def load_preferences(client_id: str | None) -> dict | None:
-    """Load client preferences and apply the simple history-derived bias."""
+    """Load explicit prefs and merge history-derived nudges (Phase 4)."""
     if not client_id:
         return None
 
     prefs = dict(db.get_preferences(client_id) or {})
     stats = db.get_client_history_stats(client_id)
+
+    if not prefs.get("keyword_boosts") and stats.get("top_keywords"):
+        prefs["keyword_boosts"] = stats["top_keywords"][:5]
+    if not prefs.get("shot_type_preference") and stats.get("top_shot_type"):
+        prefs["shot_type_preference"] = stats["top_shot_type"]
+
     bias = float(stats.get("bias", 0.0) or 0.0)
     if bias:
         prefs["culling_bias"] = float(prefs.get("culling_bias", 0.0) or 0.0) + bias

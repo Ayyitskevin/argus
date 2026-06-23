@@ -401,14 +401,86 @@ def set_preferences(client_id: str, prefs: dict, style: Optional[str] = None) ->
         return int(cur.lastrowid)
 
 
+def _client_source_pattern(client_id: str) -> str:
+    return f"%client:{client_id}%"
+
+
 def get_client_history_stats(client_id: str) -> dict:
+    """Aggregate prior runs and photo analyses for history-based prefs (Phase 4)."""
+    pattern = _client_source_pattern(client_id)
     con = connect()
     try:
-        rows = con.execute(
-            "SELECT source FROM analysis_runs WHERE source LIKE ? ORDER BY id DESC LIMIT 20",
-            (f"%client:{client_id}%",),
+        run_rows = con.execute(
+            "SELECT id FROM analysis_runs WHERE source LIKE ? ORDER BY id DESC LIMIT 50",
+            (pattern,),
         ).fetchall()
-        num_runs = len(rows)
-        return {"num_runs": num_runs, "bias": min(0.05 * num_runs, 0.2)}
+        num_runs = len(run_rows)
+        if not run_rows:
+            return {
+                "client_id": client_id,
+                "num_runs": 0,
+                "num_photos": 0,
+                "bias": 0.0,
+                "top_shot_type": None,
+                "shot_type_counts": {},
+                "top_keywords": [],
+                "avg_keeper_score": None,
+                "avg_hero_potential": None,
+            }
+
+        run_ids = [row["id"] for row in run_rows]
+        placeholders = ",".join("?" * len(run_ids))
+        photo_rows = con.execute(
+            f"""SELECT shot_type, keywords, culling
+                FROM photo_analyses
+                WHERE run_id IN ({placeholders})""",
+            run_ids,
+        ).fetchall()
+
+        shot_type_counts: dict[str, int] = {}
+        keyword_counts: dict[str, int] = {}
+        keeper_scores: list[float] = []
+        hero_scores: list[float] = []
+
+        for row in photo_rows:
+            shot_type = (row["shot_type"] or "other").strip().lower().replace(" ", "_")
+            shot_type_counts[shot_type] = shot_type_counts.get(shot_type, 0) + 1
+            for keyword in _json_or(row["keywords"], []):
+                key = str(keyword).strip()
+                if key:
+                    keyword_counts[key] = keyword_counts.get(key, 0) + 1
+            culling = _json_or(row["culling"], {})
+            try:
+                keeper_scores.append(float(culling.get("keeper_score", 0.0)))
+            except (TypeError, ValueError):
+                pass
+            try:
+                hero_scores.append(float(culling.get("hero_potential", 0.0)))
+            except (TypeError, ValueError):
+                pass
+
+        top_shot_type = (
+            max(shot_type_counts, key=shot_type_counts.get) if shot_type_counts else None
+        )
+        top_keywords = [
+            key
+            for key, _ in sorted(keyword_counts.items(), key=lambda item: (-item[1], item[0]))[:8]
+        ]
+
+        return {
+            "client_id": client_id,
+            "num_runs": num_runs,
+            "num_photos": len(photo_rows),
+            "bias": min(0.05 * num_runs, 0.2),
+            "top_shot_type": top_shot_type,
+            "shot_type_counts": shot_type_counts,
+            "top_keywords": top_keywords,
+            "avg_keeper_score": round(sum(keeper_scores) / len(keeper_scores), 3)
+            if keeper_scores
+            else None,
+            "avg_hero_potential": round(sum(hero_scores) / len(hero_scores), 3)
+            if hero_scores
+            else None,
+        }
     finally:
         close(con)

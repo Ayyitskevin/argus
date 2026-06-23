@@ -126,6 +126,18 @@ def _apply_prefs(result: AnalysisResult, prefs: dict | None) -> AnalysisResult:
         result.keywords = (
             [b for b in boosts if b not in existing] + result.keywords
         )[: config.DEFAULT_MAX_TAGS]
+
+    preferred_type = (prefs.get("shot_type_preference") or "").strip().lower().replace(" ", "_")
+    if preferred_type:
+        if result.shot_type == preferred_type:
+            result.culling.hero_potential = max(
+                0.0, min(1.0, result.culling.hero_potential + 0.05)
+            )
+            result.culling.keeper_score = max(
+                0.0, min(1.0, result.culling.keeper_score + 0.03)
+            )
+        elif result.shot_type == "other":
+            result.shot_type = preferred_type
     return result
 
 

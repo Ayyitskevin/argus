@@ -40,6 +40,9 @@ COST_TRACKING = os.environ.get("ARGUS_COST_TRACKING", "true").lower() == "true"
 CLOUD_COST_PER_IMAGE = float(os.environ.get("ARGUS_CLOUD_COST_PER_IMAGE", "0.00123"))
 TAILSCALE_HINT = os.environ.get("ARGUS_TAILSCALE_HINT", "mickey")  # e.g. "mickey" or full tailscale name
 
+# Phase 4: optional bearer auth (disabled when unset — local dev default).
+API_TOKEN = os.environ.get("ARGUS_API_TOKEN") or None
+
 # Phase 3 slice 2: direct import from mise galleries.
 # Set ARGUS_MISE_MEDIA_ROOT to the mise DATA_DIR/media (or equivalent) so that
 # --mise-gallery-id / mise_gallery_id= can auto-resolve to .../<id>/original

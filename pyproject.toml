@@ -1,7 +1,7 @@
 [project]
 name = "argus"
-version = "0.2.0"
-description = "Photography-tuned vision & metadata service — Phase 2 (service-ized)"
+version = "0.3.0"
+description = "Photography-tuned vision & metadata service — Phase 4 (history prefs + hardening)"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi",

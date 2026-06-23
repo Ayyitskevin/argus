@@ -5,8 +5,7 @@ import logging
 import threading
 from pathlib import Path
 
-from . import config, db
-from . import service
+from . import config, db, metrics, service
 
 log = logging.getLogger("argus.jobs")
 
@@ -56,8 +55,11 @@ def process_job(job: dict) -> None:
             result=job_result,
             error=None,
         )
+        metrics.inc("jobs_completed")
+        metrics.inc("photos_analyzed", result["count"])
         log.info("Job %s completed -> run %s", job_id, result["run_id"])
     except Exception as exc:
+        metrics.inc("jobs_failed")
         db.update_job(job_id, status="failed", error=str(exc))
         log.exception("Job %s failed", job_id)
 

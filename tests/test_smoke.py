@@ -40,6 +40,7 @@ def test_healthz_reports_mock_backend():
     assert body["status"] == "ok"
     assert body["backend"] == "mock"
     assert body["queue_enabled"] is False
+    assert body["auth_enabled"] is False
 
 
 def test_analyze_single_local_path(sample_image):

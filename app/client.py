@@ -197,6 +197,14 @@ class ArgusClient:
         url = f"{self.base_url}/import/mise-project"
         return self._request("post", url, data=data, method_name="import_mise_project")
 
+    def get_client_history(self, client_id: str) -> dict:
+        """GET /clients/{client_id}/history — aggregated prior run stats."""
+        return self._request(
+            "get",
+            f"{self.base_url}/clients/{client_id}/history",
+            method_name="get_client_history",
+        )
+
     def get_preferences(self, client_id: Optional[str] = None, style: Optional[str] = None) -> dict:
         """GET /preferences"""
         qs = []
