@@ -5,15 +5,17 @@ import csv
 import io
 import json
 import logging
+import os
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
 
 from . import config, db, metrics, service
 from .auth import require_bearer
@@ -32,6 +34,15 @@ STATIC_DIR = BASE_DIR / "static"
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+templates.env.filters["basename"] = os.path.basename
+
+
+class PhotoPatch(BaseModel):
+    keywords: list[str] | None = None
+    keeper_score: float | None = Field(default=None, ge=0.0, le=1.0)
+    hero_potential: float | None = Field(default=None, ge=0.0, le=1.0)
+    shot_type: str | None = None
+    promote_keywords: list[str] | None = None
 
 
 @asynccontextmanager
@@ -287,6 +298,37 @@ def import_mise_project(
     return result
 
 
+def _run_review_context(data: dict, **filters) -> dict:
+    photos = data.get("photos") or []
+    run = data["run"]
+    shot_types = sorted({photo.get("shot_type") or "other" for photo in photos})
+    filtered = service.sort_and_filter_photos(photos, **filters)
+    return {
+        "run": run,
+        "photos": filtered,
+        "all_photos": photos,
+        "heroes": service.hero_candidates(photos),
+        "shot_types": shot_types,
+        "client_id": service.extract_client_id(run.get("source")),
+        "model": run.get("model"),
+        "sort": filters.get("sort", "keeper"),
+        "filter_shot_type": filters.get("shot_type"),
+        "filter_keyword": filters.get("keyword"),
+        "filter_min_keeper": filters.get("min_keeper"),
+    }
+
+
+@app.get("/runs/compare", response_class=JSONResponse)
+def compare_runs(
+    a: int = Query(..., description="first run id"),
+    b: int = Query(..., description="second run id"),
+):
+    result = service.compare_runs(a, b)
+    if result is None:
+        return error("one or both runs not found", 404)
+    return result
+
+
 @app.get("/runs/{run_id}", response_class=HTMLResponse)
 def view_run(run_id: int, request: Request):
     data = db.get_full_run(run_id)
@@ -295,8 +337,71 @@ def view_run(run_id: int, request: Request):
     return templates.TemplateResponse(
         request,
         "run.html",
-        {"run": data["run"], "photos": data["photos"], "model": data["run"].get("model")},
+        _run_review_context(data),
     )
+
+
+@app.get("/runs/{run_id}/photos-grid", response_class=HTMLResponse)
+def run_photos_grid(
+    run_id: int,
+    request: Request,
+    sort: str = Query("keeper"),
+    shot_type: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None),
+    min_keeper: Optional[float] = Query(None),
+):
+    data = db.get_full_run(run_id)
+    if not data:
+        return HTMLResponse("Run not found", status_code=404)
+    ctx = _run_review_context(
+        data,
+        sort=sort,
+        shot_type=shot_type,
+        keyword=keyword,
+        min_keeper=min_keeper,
+    )
+    return templates.TemplateResponse(request, "partials/photos_grid.html", ctx)
+
+
+@app.patch(
+    "/runs/{run_id}/photo/{photo_id}",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_bearer)],
+)
+def patch_run_photo(run_id: int, photo_id: int, patch: PhotoPatch):
+    if not any(
+        value is not None
+        for value in (
+            patch.keywords,
+            patch.keeper_score,
+            patch.hero_potential,
+            patch.shot_type,
+            patch.promote_keywords,
+        )
+    ):
+        return error("provide at least one field to update", 400)
+
+    result = service.apply_photo_correction(
+        run_id,
+        photo_id,
+        keywords=patch.keywords,
+        keeper_score=patch.keeper_score,
+        hero_potential=patch.hero_potential,
+        shot_type=patch.shot_type,
+        promote_keywords=patch.promote_keywords,
+    )
+    if result is None:
+        return error("photo not found", 404)
+
+    metrics.inc("photo_corrections")
+    return {
+        "ok": True,
+        "run_id": run_id,
+        "photo_id": photo_id,
+        "photo": result["photo"],
+        "client_id": result["client_id"],
+        "prefs_updated": result["prefs_updated"],
+    }
 
 
 @app.get("/runs", response_class=JSONResponse)

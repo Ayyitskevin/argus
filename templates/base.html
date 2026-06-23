@@ -1,1 +1,81 @@
-<!-- assume current content from workspace, but for this, placeholder or from knowledge: the templates are standard Jinja for argus UI -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>argus / photometa — {{ title or 'Phase 7' }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+  <style>
+    :root {
+      --bg: #f4f2ec;
+      --card: #fff;
+      --ink: #1e1e1e;
+      --muted: #666;
+      --line: #e4dfd4;
+      --accent: #1a5f3a;
+      --accent-soft: #e8f2ec;
+      --warn: #8a5a12;
+    }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 0; background: var(--bg); color: var(--ink); line-height: 1.45; }
+    .container { max-width: 1280px; margin: 0 auto; padding: 1.5rem; }
+    .card { background: var(--card); border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.06); border: 1px solid var(--line); }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; gap: 1rem; flex-wrap: wrap; }
+    .small { font-size: .82rem; color: var(--muted); }
+    .nav { margin-bottom: .75rem; }
+    .nav a { color: var(--accent); text-decoration: none; }
+    .nav a:hover { text-decoration: underline; }
+    form { margin: .75rem 0; }
+    input[type=text], input[type=file], input[type=number], select {
+      padding: .45rem .55rem; font-size: .95rem; border: 1px solid #ccc; border-radius: 6px; background: #fff;
+    }
+    button, .btn {
+      background: #222; color: white; border: none; border-radius: 6px; padding: .45rem .85rem;
+      cursor: pointer; font-size: .9rem; text-decoration: none; display: inline-block;
+    }
+    button:hover, .btn:hover { background: #444; }
+    button.secondary, .btn.secondary { background: #eee; color: #222; border: 1px solid #ccc; }
+    button.secondary:hover { background: #e4e4e4; }
+    .tag { display: inline-block; background: #f0ede6; padding: 2px 7px; margin: 2px 4px 2px 0; border-radius: 4px; font-size: .74rem; }
+    .tag.promote { background: var(--accent-soft); color: var(--accent); cursor: pointer; }
+    .score { font-weight: 600; color: var(--accent); }
+    pre { background: #f9f8f4; padding: .5rem; overflow: auto; font-size: .75rem; border-radius: 6px; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: .6rem; align-items: end; margin-bottom: .75rem; }
+    .toolbar label { display: flex; flex-direction: column; gap: .2rem; font-size: .78rem; color: var(--muted); }
+    .hero-strip { display: flex; gap: .75rem; overflow-x: auto; padding-bottom: .25rem; }
+    .hero-card {
+      flex: 0 0 160px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff;
+    }
+    .hero-card img { width: 100%; height: 110px; object-fit: cover; display: block; background: #eee; }
+    .hero-card .hero-meta { padding: .4rem .5rem; font-size: .75rem; }
+    .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
+    .photo {
+      border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #fff;
+      display: grid; grid-template-columns: 120px 1fr;
+    }
+    .photo-thumb { background: #eee; min-height: 120px; }
+    .photo-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; min-height: 120px; }
+    .photo-body { padding: .65rem .75rem; font-size: .86rem; }
+    .photo-title { font-weight: 600; font-size: .82rem; margin-bottom: .25rem; word-break: break-all; }
+    .edit-row { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .5rem; align-items: center; }
+    .edit-row input[type=text] { flex: 1; min-width: 140px; font-size: .82rem; }
+    .edit-row input[type=number] { width: 72px; font-size: .82rem; }
+    .htmx-indicator { opacity: .5; }
+    .badge { background: var(--accent-soft); color: var(--accent); padding: 2px 8px; border-radius: 999px; font-size: .72rem; font-weight: 600; }
+    .status-ok { color: var(--accent); font-size: .78rem; }
+    .status-err { color: #a11; font-size: .78rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1 style="margin:0">argus <span class="small">/ photometa</span></h1>
+      <div class="small">
+        {{ model or '—' }} · <a href="/healthz">/healthz</a> · <a href="/">home</a>
+      </div>
+    </div>
+    {% block content %}{% endblock %}
+    <p class="small" style="margin-top:2rem">Phase 7 — review UI · <a href="https://github.com/Ayyitskevin/argus" target="_blank">GitHub</a></p>
+  </div>
+</body>
+</html>

@@ -1,1 +1,44 @@
-<!-- current from edits -->
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+  <h2>Analyze photographs</h2>
+  <p class="small">
+    Local dogfood tool. Use a real folder of edited photos for the best test.
+    Results land in SQLite and open in the <strong>review UI</strong> for culling.
+  </p>
+
+  <form action="/analyze-folder" method="post" style="margin-bottom: 1.25rem;">
+    <div>
+      <label><strong>Local folder path</strong></label><br>
+      <input type="text" name="folder" style="width: 65%" placeholder="/home/kevin-lee/photos/your-gallery" required>
+      <input type="number" name="limit" value="15" min="1" max="100" style="width: 70px" title="max photos">
+      <button type="submit">Analyze folder</button>
+    </div>
+    <div class="small" style="margin-top: .3rem">Only images with supported extensions are processed.</div>
+  </form>
+
+  <form action="/analyze" method="post" enctype="multipart/form-data">
+    <div>
+      <label><strong>Single image upload</strong> (quick test)</label><br>
+      <input type="file" name="file" accept="image/*">
+      <button type="submit">Analyze image</button>
+    </div>
+  </form>
+</div>
+
+{% if recent_runs %}
+<div class="card">
+  <h3>Recent runs</h3>
+  <ul style="padding-left:1.1rem; margin:0">
+    {% for r in recent_runs %}
+      <li style="margin-bottom:.35rem">
+        <a href="/runs/{{ r.id }}">Run #{{ r.id }}</a>
+        — {{ r.source or '(upload)' }}
+        <span class="small">({{ r.photo_count or 0 }} photos) · {{ r.created_at }}</span>
+      </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+{% endblock %}

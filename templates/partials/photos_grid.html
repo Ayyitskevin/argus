@@ -1,0 +1,35 @@
+{% for p in photos %}
+<article class="photo" id="photo-{{ p.id }}">
+  <a class="photo-thumb" href="/thumb/{{ p.id }}" target="_blank" title="Open thumbnail">
+    <img src="/thumb/{{ p.id }}" alt="{{ p.basename }}" loading="lazy">
+  </a>
+  <div class="photo-body">
+    <div class="photo-title">{{ p.basename }}</div>
+    <div class="small">{{ p.width }}×{{ p.height }}</div>
+    <div style="margin-top:.35rem">
+      <span class="score">Keeper {{ '%.0f'|format((p.culling.keeper_score or 0) * 100) }}%</span>
+      · Hero {{ '%.0f'|format((p.culling.hero_potential or 0) * 100) }}%
+      · <span class="tag">{{ p.shot_type or 'other' }}</span>
+    </div>
+    <div style="margin:.4rem 0 .2rem">
+      {% for tag in p.keywords %}
+        <span class="tag">{{ tag }}</span>
+      {% endfor %}
+      {% if not p.keywords %}<span class="small">(no tags)</span>{% endif %}
+    </div>
+    <div class="small"><strong>Alt:</strong> {{ p.alt_text or '—' }}</div>
+
+    <div class="edit-row" data-run-id="{{ run.id }}" data-photo-id="{{ p.id }}">
+      <input type="text" class="kw-input" placeholder="keywords (comma-separated)" value="{{ (p.keywords or [])|join(', ') }}">
+      <input type="number" class="keeper-input" step="0.01" min="0" max="1" placeholder="keeper" value="{{ p.culling.keeper_score or '' }}" title="keeper 0–1">
+      <button type="button" class="secondary save-photo">Save</button>
+      {% if client_id %}
+      <button type="button" class="secondary boost-photo">Boost tags</button>
+      {% endif %}
+      <span class="photo-status"></span>
+    </div>
+  </div>
+</article>
+{% else %}
+<p class="small">No photos match the current filters.</p>
+{% endfor %}

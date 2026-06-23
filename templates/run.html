@@ -1,1 +1,128 @@
-<!-- current -->
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+  <h2>Run #{{ run.id }} <span class="badge">cull</span></h2>
+  <div class="small">
+    {{ run.source }} · {{ run.model }} · {{ all_photos|length }} photos
+    {% if client_id %} · client <strong>{{ client_id }}</strong>{% endif %}
+  </div>
+  <div class="nav"><a href="/">← new analysis</a> · <a href="/runs/{{ run.id }}/export.csv">CSV</a> · <a href="/runs/{{ run.id }}/export">JSON</a></div>
+</div>
+
+{% if heroes %}
+<div class="card">
+  <h3 style="margin-top:0">Hero candidates</h3>
+  <div class="hero-strip">
+    {% for h in heroes %}
+    <a class="hero-card" href="#photo-{{ h.id }}" title="{{ h.basename }}">
+      <img src="/thumb/{{ h.id }}" alt="{{ h.basename }}" loading="lazy">
+      <div class="hero-meta">
+        <div><strong>{{ h.basename }}</strong></div>
+        <div class="score">Hero {{ '%.0f'|format((h.culling.hero_potential or 0) * 100) }}%</div>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <h3 style="margin-top:0">Culling grid</h3>
+  <form class="toolbar"
+        hx-get="/runs/{{ run.id }}/photos-grid"
+        hx-target="#photo-grid"
+        hx-trigger="change, submit"
+        hx-indicator="#grid-loading">
+    <label>Sort
+      <select name="sort">
+        <option value="keeper" {% if sort == 'keeper' %}selected{% endif %}>Keeper ↓</option>
+        <option value="hero" {% if sort == 'hero' %}selected{% endif %}>Hero ↓</option>
+        <option value="name" {% if sort == 'name' %}selected{% endif %}>Name</option>
+      </select>
+    </label>
+    <label>Shot type
+      <select name="shot_type">
+        <option value="">All</option>
+        {% for st in shot_types %}
+        <option value="{{ st }}" {% if filter_shot_type == st %}selected{% endif %}>{{ st }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Keyword
+      <input type="text" name="keyword" placeholder="filter tag" value="{{ filter_keyword or '' }}">
+    </label>
+    <label>Min keeper
+      <input type="number" name="min_keeper" step="0.1" min="0" max="1" placeholder="0.0" value="{{ filter_min_keeper or '' }}">
+    </label>
+    <button type="submit" class="secondary">Apply</button>
+    <span id="grid-loading" class="small htmx-indicator">Updating…</span>
+  </form>
+
+  <div class="card" style="background:#faf9f6; margin-bottom:.75rem">
+    <div class="small"><strong>Corrections</strong> need bearer auth when <code>ARGUS_API_TOKEN</code> is set.</div>
+    <label class="small">API token (session only, not stored)
+      <input type="password" id="argus-token" style="width:220px; margin-left:.5rem"
+             oninput="window.argusToken=this.value">
+    </label>
+  </div>
+
+  <div id="photo-grid" class="photo-grid">
+    {% include "partials/photos_grid.html" %}
+  </div>
+</div>
+
+{% if not all_photos %}
+<p>No photos in this run.</p>
+{% endif %}
+
+<script>
+(function () {
+  function token() { return window.argusToken || ""; }
+  function status(el, ok, msg) {
+    el.innerHTML = ok
+      ? '<span class="status-ok">' + msg + '</span>'
+      : '<span class="status-err">' + msg + '</span>';
+  }
+  function parseKeywords(raw) {
+    return raw.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+  }
+  async function patchPhoto(runId, photoId, body) {
+    if (!token()) throw new Error("Set API token above to save corrections");
+    const res = await fetch("/runs/" + runId + "/photo/" + photoId, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + token(),
+      },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || data.detail || "request failed");
+    return data;
+  }
+  document.getElementById("photo-grid").addEventListener("click", async function (ev) {
+    const row = ev.target.closest(".edit-row");
+    if (!row) return;
+    const runId = row.dataset.runId;
+    const photoId = row.dataset.photoId;
+    const statusEl = row.querySelector(".photo-status");
+    const keywords = parseKeywords(row.querySelector(".kw-input").value || "");
+    try {
+      if (ev.target.classList.contains("save-photo")) {
+        const keeperRaw = row.querySelector(".keeper-input").value;
+        const body = { keywords: keywords };
+        if (keeperRaw !== "") body.keeper_score = parseFloat(keeperRaw);
+        const data = await patchPhoto(runId, photoId, body);
+        status(statusEl, true, "Saved" + (data.prefs_updated ? " · prefs updated" : ""));
+      } else if (ev.target.classList.contains("boost-photo")) {
+        const data = await patchPhoto(runId, photoId, { promote_keywords: keywords });
+        status(statusEl, true, data.prefs_updated ? "Promoted to prefs" : "Saved");
+      }
+    } catch (err) {
+      status(statusEl, false, err.message || String(err));
+    }
+  });
+})();
+</script>
+{% endblock %}

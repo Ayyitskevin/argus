@@ -11,6 +11,16 @@ from .sidecars import write_sidecar
 log = logging.getLogger("argus.service")
 
 
+def extract_client_id(source: str | None) -> str | None:
+    """Parse ``client:<id>|...`` from a persisted run source label."""
+    if not source or not source.startswith("client:"):
+        return None
+    rest = source[7:]
+    pipe = rest.find("|")
+    client_id = rest[:pipe] if pipe >= 0 else rest
+    return client_id.strip() or None
+
+
 def result_to_dict(result: Any) -> dict:
     """Normalize Pydantic results and plain dicts into JSON-ready dicts."""
     if hasattr(result, "model_dump"):
@@ -175,3 +185,181 @@ def analyze_folder_run(
     if client_id:
         out["client_id"] = client_id
     return out
+
+
+def sort_and_filter_photos(
+    photos: list[dict],
+    *,
+    sort: str = "keeper",
+    shot_type: str | None = None,
+    keyword: str | None = None,
+    min_keeper: float | None = None,
+) -> list[dict]:
+    """Apply Phase 7 culling UI sort/filter in memory."""
+    filtered = list(photos)
+    if shot_type:
+        want = shot_type.strip().lower().replace(" ", "_")
+        filtered = [photo for photo in filtered if photo.get("shot_type") == want]
+    if keyword:
+        needle = keyword.strip().lower()
+        if needle:
+            filtered = [
+                photo
+                for photo in filtered
+                if any(needle in str(tag).lower() for tag in (photo.get("keywords") or []))
+            ]
+    if min_keeper is not None:
+        filtered = [
+            photo
+            for photo in filtered
+            if float((photo.get("culling") or {}).get("keeper_score", 0.0) or 0.0) >= min_keeper
+        ]
+
+    def keeper_score(photo: dict) -> float:
+        return float((photo.get("culling") or {}).get("keeper_score", 0.0) or 0.0)
+
+    def hero_score(photo: dict) -> float:
+        return float((photo.get("culling") or {}).get("hero_potential", 0.0) or 0.0)
+
+    if sort == "hero":
+        filtered.sort(key=lambda photo: (-hero_score(photo), photo.get("basename", "")))
+    elif sort == "name":
+        filtered.sort(key=lambda photo: photo.get("basename", ""))
+    else:
+        filtered.sort(key=lambda photo: (-keeper_score(photo), photo.get("basename", "")))
+    return filtered
+
+
+def hero_candidates(photos: list[dict], limit: int = 5) -> list[dict]:
+    """Top N photos by hero_potential for the hero strip."""
+    return sort_and_filter_photos(photos, sort="hero")[:limit]
+
+
+def record_correction_prefs(
+    client_id: str,
+    *,
+    keywords: list[str] | None = None,
+    promote_keywords: list[str] | None = None,
+) -> dict:
+    """Merge human corrections into explicit client prefs (beats history)."""
+    prefs = dict(db.get_preferences(client_id) or {})
+    boosts = list(prefs.get("keyword_boosts") or [])
+    for tag in promote_keywords or keywords or []:
+        key = str(tag).strip()
+        if not key:
+            continue
+        if key in boosts:
+            boosts.remove(key)
+        boosts.insert(0, key)
+    prefs["keyword_boosts"] = boosts[:10]
+    db.set_preferences(client_id, prefs)
+    return prefs
+
+
+def apply_photo_correction(
+    run_id: int,
+    photo_id: int,
+    *,
+    keywords: list[str] | None = None,
+    keeper_score: float | None = None,
+    hero_potential: float | None = None,
+    shot_type: str | None = None,
+    promote_keywords: list[str] | None = None,
+) -> dict | None:
+    """PATCH one photo and optionally feed corrections into client prefs."""
+    culling_patch: dict[str, float] = {}
+    if keeper_score is not None:
+        culling_patch["keeper_score"] = max(0.0, min(1.0, float(keeper_score)))
+    if hero_potential is not None:
+        culling_patch["hero_potential"] = max(0.0, min(1.0, float(hero_potential)))
+
+    photo = db.update_photo_analysis(
+        run_id,
+        photo_id,
+        keywords=keywords,
+        culling=culling_patch or None,
+        shot_type=shot_type,
+    )
+    if photo is None:
+        return None
+
+    run = db.get_run(run_id)
+    client_id = extract_client_id(run["source"] if run else None)
+    prefs_updated = False
+    if client_id and (keywords is not None or promote_keywords):
+        record_correction_prefs(
+            client_id,
+            keywords=keywords,
+            promote_keywords=promote_keywords,
+        )
+        prefs_updated = True
+
+    return {
+        "photo": photo,
+        "client_id": client_id,
+        "prefs_updated": prefs_updated,
+    }
+
+
+def compare_runs(run_a_id: int, run_b_id: int) -> dict | None:
+    """Diff two runs by path overlap and score drift (re-analyze comparison)."""
+    data_a = db.get_full_run(run_a_id)
+    data_b = db.get_full_run(run_b_id)
+    if not data_a or not data_b:
+        return None
+
+    def summarize(data: dict) -> dict:
+        photos = data.get("photos") or []
+        keepers = [
+            float((photo.get("culling") or {}).get("keeper_score", 0.0) or 0.0)
+            for photo in photos
+        ]
+        heroes = [
+            float((photo.get("culling") or {}).get("hero_potential", 0.0) or 0.0)
+            for photo in photos
+        ]
+        return {
+            "run_id": data["run"]["id"],
+            "photo_count": len(photos),
+            "avg_keeper_score": round(sum(keepers) / len(keepers), 3) if keepers else None,
+            "avg_hero_potential": round(sum(heroes) / len(heroes), 3) if heroes else None,
+            "model": data["run"].get("model"),
+            "source": data["run"].get("source"),
+        }
+
+    by_path_a = {photo["image_path"]: photo for photo in data_a.get("photos", [])}
+    by_path_b = {photo["image_path"]: photo for photo in data_b.get("photos", [])}
+    common_paths = sorted(set(by_path_a) & set(by_path_b))
+
+    score_changes = []
+    for path in common_paths:
+        culling_a = by_path_a[path].get("culling") or {}
+        culling_b = by_path_b[path].get("culling") or {}
+        keeper_a = float(culling_a.get("keeper_score", 0.0) or 0.0)
+        keeper_b = float(culling_b.get("keeper_score", 0.0) or 0.0)
+        score_changes.append(
+            {
+                "image_path": path,
+                "basename": by_path_a[path].get("basename"),
+                "keeper_a": keeper_a,
+                "keeper_b": keeper_b,
+                "keeper_delta": round(keeper_b - keeper_a, 3),
+            }
+        )
+    score_changes.sort(key=lambda item: abs(item["keeper_delta"]), reverse=True)
+
+    summary_a = summarize(data_a)
+    summary_b = summarize(data_b)
+    keeper_a = summary_a.get("avg_keeper_score")
+    keeper_b = summary_b.get("avg_keeper_score")
+    return {
+        "a": summary_a,
+        "b": summary_b,
+        "common_paths": len(common_paths),
+        "only_in_a": len(set(by_path_a) - set(by_path_b)),
+        "only_in_b": len(set(by_path_b) - set(by_path_a)),
+        "avg_keeper_delta": round(keeper_b - keeper_a, 3)
+        if keeper_a is not None and keeper_b is not None
+        else None,
+        "score_changes": score_changes[:50],
+    }

@@ -233,6 +233,69 @@ def get_photos_for_run(run_id: int) -> list[sqlite3.Row]:
         close(con)
 
 
+def get_photo_for_run(run_id: int, photo_id: int) -> dict | None:
+    """Return one photo dict for a run, or None if missing or mismatched."""
+    con = connect()
+    try:
+        row = con.execute(
+            "SELECT * FROM photo_analyses WHERE id=? AND run_id=?",
+            (photo_id, run_id),
+        ).fetchone()
+        if row is None:
+            return None
+        photo = dict(row)
+        photo["keywords"] = _json_or(photo.get("keywords"), [])
+        photo["culling"] = _json_or(photo.get("culling"), {})
+        photo["suggested_iptc"] = _json_or(photo.get("suggested_iptc"), {})
+        shot_type = photo.get("shot_type") or "other"
+        photo["shot_type"] = str(shot_type).strip().lower().replace(" ", "_") or "other"
+        photo["basename"] = os.path.basename(str(photo.get("image_path") or ""))
+        return photo
+    finally:
+        close(con)
+
+
+def update_photo_analysis(
+    run_id: int,
+    photo_id: int,
+    *,
+    keywords: list[str] | None = None,
+    culling: dict | None = None,
+    shot_type: str | None = None,
+) -> dict | None:
+    """Patch keywords, culling fields, and/or shot_type for one photo."""
+    photo = get_photo_for_run(run_id, photo_id)
+    if photo is None:
+        return None
+
+    updates: dict[str, object] = {}
+    if keywords is not None:
+        cleaned = [str(tag).strip() for tag in keywords if str(tag).strip()]
+        updates["keywords"] = json.dumps(cleaned)
+        photo["keywords"] = cleaned
+    if culling is not None:
+        merged = dict(photo.get("culling") or {})
+        merged.update(culling)
+        updates["culling"] = json.dumps(merged)
+        photo["culling"] = merged
+    if shot_type is not None:
+        normalized = str(shot_type).strip().lower().replace(" ", "_") or "other"
+        updates["shot_type"] = normalized
+        photo["shot_type"] = normalized
+
+    if not updates:
+        return photo
+
+    assignments = ", ".join(f"{key}=?" for key in updates)
+    values = list(updates.values()) + [photo_id, run_id]
+    with tx() as con:
+        con.execute(
+            f"UPDATE photo_analyses SET {assignments} WHERE id=? AND run_id=?",
+            values,
+        )
+    return photo
+
+
 def list_recent_runs(limit: int = 20) -> list[sqlite3.Row]:
     con = connect()
     try:
