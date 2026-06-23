@@ -22,6 +22,8 @@ from .sidecars import write_sidecar
 from .vision import make_thumbnail
 
 logging.basicConfig(level=logging.INFO)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 log = logging.getLogger("argus")
 
 BASE_DIR = Path(__file__).resolve().parent.parent

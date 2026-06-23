@@ -110,6 +110,40 @@ def _prepare_image(path: str | Path) -> tuple[bytes, tuple[int, int]]:
         return buf.getvalue(), (w, h)
 
 
+def _ollama_json_content(resp: dict) -> str:
+    """Pull JSON text from an Ollama chat response.
+
+    qwen3-vl is a thinking model: with format=json the answer may land in
+    `thinking` while `content` is empty or `{}`. mnemosyne hit the same pattern.
+    """
+    msg = resp.get("message") or {}
+    content = (msg.get("content") or "").strip()
+    if content and content != "{}":
+        return content
+    thinking = (msg.get("thinking") or "").strip()
+    if thinking:
+        return thinking
+    return content
+
+
+def _parse_vision_payload(content: str) -> dict:
+    parsed = json.loads(content)
+    if not isinstance(parsed, dict):
+        raise ValueError("vision JSON root must be an object")
+    return parsed
+
+
+def _is_degenerate_payload(parsed: dict) -> bool:
+    """True when the model returned technically-valid but useless JSON."""
+    if not parsed:
+        return True
+    keywords = parsed.get("keywords") or []
+    has_keywords = isinstance(keywords, list) and any(str(k).strip() for k in keywords)
+    shot_type = (parsed.get("shot_type") or "").strip().lower()
+    has_alt = bool((parsed.get("alt_text") or "").strip())
+    return not has_keywords and shot_type in ("", "other") and not has_alt
+
+
 def _apply_prefs(result: AnalysisResult, prefs: dict | None) -> AnalysisResult:
     """Nudge a result by learned preferences (Phase 3). Minimal but real: a
     culling_bias shifts keeper/hero scores (clamped 0..1) and keyword_boosts are
@@ -199,20 +233,32 @@ def analyze_image(
 
     try:
         client = ollama.Client(host=config.OLLAMA_HOST)
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt, "images": [b64]},
+        ]
         resp = client.chat(
             model=model,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt, "images": [b64]},
-            ],
+            messages=messages,
             format="json",
-            options={
-                "temperature": 0.2,
-                "top_p": 0.9,
-            },
+            options={"temperature": 0.2, "top_p": 0.9},
         )
-        content = resp["message"]["content"].strip()
-        parsed = json.loads(content)
+        content = _ollama_json_content(resp)
+        parsed = _parse_vision_payload(content)
+        if _is_degenerate_payload(parsed):
+            log.warning("degenerate vision JSON for %s — retrying once", image_path)
+            retry_prompt = user_prompt + "\n\nYour previous reply was empty. Return populated JSON only."
+            resp = client.chat(
+                model=model,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": retry_prompt, "images": [b64]},
+                ],
+                format="json",
+                options={"temperature": 0.1, "top_p": 0.9},
+            )
+            content = _ollama_json_content(resp)
+            parsed = _parse_vision_payload(content)
 
         # Light normalization / defaults
         keywords = parsed.get("keywords") or []

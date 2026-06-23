@@ -1,15 +1,21 @@
+# Copy to /etc/systemd/system/argus.service (see install-service.sh)
 [Unit]
-Description=Argus photometa service (mock safe)
+Description=Argus photometa service
 After=network.target
 
 [Service]
 Type=simple
-User=kevin
+User=kevin-lee
+Group=kevin-lee
 WorkingDirectory=/home/kevin-lee/ai-workspace/argus
+EnvironmentFile=-/home/kevin-lee/ai-workspace/argus/.env
 Environment=ARGUS_VISION_BACKEND=mock
+Environment=ARGUS_HOST=0.0.0.0
+Environment=ARGUS_PORT=8010
 Environment=ARGUS_QUEUE_ENABLED=true
-ExecStart=/home/kevin-lee/ai-workspace/argus/.venv/bin/python -m app.main
-Restart=always
+ExecStart=/home/kevin-lee/ai-workspace/argus/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8010
+Restart=on-failure
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
