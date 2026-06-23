@@ -102,6 +102,11 @@ def save_photo_analysis(run_id: int, data: dict) -> int:
                 data.get("raw_response"),
             ),
         )
+        # Bump the run count (simple for Phase 0)
+        con.execute(
+            "UPDATE analysis_runs SET photo_count = photo_count + 1 WHERE id = ?",
+            (run_id,),
+        )
         return cur.lastrowid
 
 
