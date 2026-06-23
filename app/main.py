@@ -988,8 +988,14 @@ def saas_status():
         "rate_limit_enabled": config.RATE_LIMIT_ENABLED,
         "audit_log_enabled": config.AUDIT_LOG_ENABLED,
         "billing_enabled": billing.billing_enabled(),
+        "billing": billing.billing_status(),
         "metering": metering.usage_snapshot(),
     }
+
+
+@app.get("/saas/billing/status", response_class=JSONResponse)
+def saas_billing_status():
+    return billing.billing_status()
 
 
 @app.get("/tenant/profile", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
@@ -1120,6 +1126,18 @@ def tenant_billing_checkout(request: Request, ctx: AuthContext = Depends(require
     return session
 
 
+@app.post("/tenant/billing/portal", response_class=JSONResponse)
+def tenant_billing_portal(request: Request, ctx: AuthContext = Depends(require_bearer)):
+    if not ctx.tenant:
+        return error("tenant API key required", 403)
+    try:
+        portal = billing.create_billing_portal_session(ctx.tenant_id)
+    except billing.BillingError as exc:
+        return error(str(exc), 400)
+    audit.record("billing.portal", request=request, ctx=ctx, tenant_id=ctx.tenant_id)
+    return portal
+
+
 @app.post("/webhooks/stripe")
 async def stripe_webhook(request: Request):
     payload = await request.body()
@@ -1238,8 +1256,45 @@ def ui_saas_billing(request: Request, success: Optional[str] = Query(None), canc
             billing_success=bool(success),
             billing_cancelled=bool(cancelled),
             billing_enabled=billing.billing_enabled(),
+            billing_info=billing.billing_status(),
+            billing_error=None,
         ),
     )
+
+
+@app.post("/ui/saas/billing/checkout")
+def ui_saas_billing_checkout(request: Request, api_token: Optional[str] = Form(None)):
+    ctx = verify_api_access(request, form_token=api_token)
+    if not ctx.tenant:
+        return error("tenant API key required", 403)
+    try:
+        session = billing.create_checkout_session(ctx.tenant_id)
+    except billing.BillingError as exc:
+        return templates.TemplateResponse(
+            request,
+            "saas_billing.html",
+            _ui_context(title="Billing", tenant=ctx.tenant, billing_error=str(exc), billing_enabled=False),
+            status_code=400,
+        )
+    audit.record("billing.checkout", request=request, ctx=ctx, tenant_id=ctx.tenant_id, detail=session)
+    return RedirectResponse(session["checkout_url"], status_code=303)
+
+
+@app.post("/ui/saas/billing/portal")
+def ui_saas_billing_portal(request: Request, api_token: Optional[str] = Form(None)):
+    ctx = verify_api_access(request, form_token=api_token)
+    if not ctx.tenant:
+        return error("tenant API key required", 403)
+    try:
+        portal = billing.create_billing_portal_session(ctx.tenant_id)
+    except billing.BillingError as exc:
+        return templates.TemplateResponse(
+            request,
+            "saas_billing.html",
+            _ui_context(title="Billing", tenant=ctx.tenant, billing_error=str(exc)),
+            status_code=400,
+        )
+    return RedirectResponse(portal["portal_url"], status_code=303)
 
 
 @app.post("/ui/saas/analyze")

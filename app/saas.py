@@ -19,6 +19,7 @@ log = logging.getLogger("argus.saas")
 SAAS_PUBLIC_PATHS = frozenset({
     "/healthz",
     "/saas/status",
+    "/saas/billing/status",
     "/vision/status",
     "/openapi.json",
     "/docs",

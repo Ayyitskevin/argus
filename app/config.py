@@ -88,9 +88,19 @@ AUDIT_LOG_RETENTION_DAYS = int(os.environ.get("ARGUS_AUDIT_LOG_RETENTION_DAYS", 
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY") or None
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET") or None
 STRIPE_PRICE_ID = os.environ.get("STRIPE_PRICE_ID") or None  # subscription price
-STRIPE_SUCCESS_URL = os.environ.get("STRIPE_SUCCESS_URL", "http://127.0.0.1:8010/ui/saas/billing?success=1")
-STRIPE_CANCEL_URL = os.environ.get("STRIPE_CANCEL_URL", "http://127.0.0.1:8010/ui/saas/billing?cancelled=1")
 SAAS_PUBLIC_URL = os.environ.get("ARGUS_SAAS_PUBLIC_URL", f"http://{HOST}:{PORT}")
+STRIPE_SUCCESS_URL = os.environ.get(
+    "STRIPE_SUCCESS_URL",
+    f"{SAAS_PUBLIC_URL.rstrip('/')}/ui/saas/billing?success=1",
+)
+STRIPE_CANCEL_URL = os.environ.get(
+    "STRIPE_CANCEL_URL",
+    f"{SAAS_PUBLIC_URL.rstrip('/')}/ui/saas/billing?cancelled=1",
+)
+STRIPE_BILLING_PORTAL_RETURN_URL = os.environ.get(
+    "STRIPE_BILLING_PORTAL_RETURN_URL",
+    f"{SAAS_PUBLIC_URL.rstrip('/')}/ui/saas/billing",
+)
 
 # Phase 3 slice 2: direct import from mise galleries.
 # Set ARGUS_MISE_MEDIA_ROOT to the mise DATA_DIR/media (or equivalent) so that

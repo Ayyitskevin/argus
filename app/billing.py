@@ -20,8 +20,31 @@ class BillingError(Exception):
     """Raised when billing configuration or Stripe calls fail."""
 
 
+def _stripe_value_ok(value: str | None) -> bool:
+    if not value or not str(value).strip():
+        return False
+    upper = str(value).upper()
+    return "CHANGE_ME" not in upper
+
+
 def billing_enabled() -> bool:
-    return bool(config.STRIPE_SECRET_KEY and config.STRIPE_PRICE_ID)
+    return _stripe_value_ok(config.STRIPE_SECRET_KEY) and _stripe_value_ok(config.STRIPE_PRICE_ID)
+
+
+def stripe_test_mode() -> bool:
+    key = config.STRIPE_SECRET_KEY or ""
+    return key.startswith("sk_test_") or key.startswith("rk_test_")
+
+
+def billing_status() -> dict:
+    return {
+        "enabled": billing_enabled(),
+        "test_mode": stripe_test_mode(),
+        "price_id": config.STRIPE_PRICE_ID,
+        "webhook_configured": bool(config.STRIPE_WEBHOOK_SECRET),
+        "success_url": config.STRIPE_SUCCESS_URL,
+        "cancel_url": config.STRIPE_CANCEL_URL,
+    }
 
 
 def _stripe_request(method: str, path: str, data: dict | None = None) -> dict:
@@ -80,6 +103,24 @@ def create_checkout_session(tenant_id: str) -> dict:
         },
     )
     return {"checkout_url": session["url"], "session_id": session["id"]}
+
+
+def create_billing_portal_session(tenant_id: str) -> dict:
+    if not billing_enabled():
+        raise BillingError("Stripe billing is not configured")
+    tenant = db.get_tenant(tenant_id)
+    if not tenant:
+        raise BillingError(f"tenant not found: {tenant_id}")
+    customer_id = tenant.get("stripe_customer_id") or ensure_stripe_customer(tenant_id)
+    portal = _stripe_request(
+        "POST",
+        "/billing_portal/sessions",
+        {
+            "customer": customer_id,
+            "return_url": config.STRIPE_BILLING_PORTAL_RETURN_URL,
+        },
+    )
+    return {"portal_url": portal["url"]}
 
 
 def verify_webhook_signature(payload: bytes, sig_header: str | None) -> bool:

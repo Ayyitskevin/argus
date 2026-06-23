@@ -820,7 +820,17 @@ def list_tenants(*, active_only: bool = False) -> list[dict]:
 
 
 def update_tenant(tenant_id: str, **fields) -> dict | None:
-    allowed = {"name", "active", "vision_provider", "cost_cap_usd", "monthly_image_cap"}
+    allowed = {
+        "name",
+        "active",
+        "vision_provider",
+        "cost_cap_usd",
+        "monthly_image_cap",
+        "stripe_customer_id",
+        "stripe_subscription_id",
+        "billing_status",
+        "plan_tier",
+    }
     updates = {k: v for k, v in fields.items() if k in allowed}
     if not updates:
         return get_tenant(tenant_id)

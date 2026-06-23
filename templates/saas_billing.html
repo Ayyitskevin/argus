@@ -3,19 +3,38 @@
 <div class="card" style="max-width: 640px; margin: 1rem auto;">
   <h2 style="margin-top:0">Billing</h2>
   {% if billing_success %}
-  <p class="status-ok">Checkout completed — subscription should activate shortly via Stripe webhook.</p>
+  <p class="status-ok">Checkout completed — your subscription activates when Stripe sends the webhook (usually within seconds).</p>
   {% endif %}
   {% if billing_cancelled %}
   <p class="small">Checkout cancelled.</p>
   {% endif %}
+  {% if billing_error %}
+  <p class="status-err">{{ billing_error }}</p>
+  {% endif %}
   {% if tenant %}
-  <p class="small">Tenant <strong>{{ tenant.id }}</strong> · status: {{ tenant.billing_status or 'pending' }}</p>
+  <p class="small">Tenant <strong>{{ tenant.id }}</strong></p>
+  <p class="small">Status: <strong>{{ tenant.billing_status or 'not subscribed' }}</strong> · Plan: {{ tenant.plan_tier or 'trial' }}</p>
+  {% if tenant.stripe_subscription_id %}
+  <p class="small">Subscription: <code>{{ tenant.stripe_subscription_id }}</code></p>
   {% endif %}
+  {% endif %}
+
   {% if billing_enabled %}
-  <p class="small">Stripe is configured. Use API <code>POST /tenant/billing/checkout</code> or ask admin for checkout link.</p>
+  <p class="small">Stripe {% if billing_info.test_mode %}test{% else %}live{% endif %} mode · price <code>{{ billing_info.price_id }}</code></p>
+  <div style="display:flex; gap:.5rem; flex-wrap:wrap; margin-top:1rem">
+    <form method="post" action="/ui/saas/billing/checkout">
+      <button type="submit">Subscribe — Argus Cloud Pro</button>
+    </form>
+    {% if tenant and tenant.stripe_customer_id %}
+    <form method="post" action="/ui/saas/billing/portal">
+      <button type="submit" class="secondary">Manage subscription</button>
+    </form>
+    {% endif %}
+  </div>
+  <p class="small" style="margin-top:1rem">Test card: <code>4242 4242 4242 4242</code> · any future expiry · any CVC</p>
   {% else %}
-  <p class="small">Stripe not configured on this deploy (<code>STRIPE_SECRET_KEY</code> + <code>STRIPE_PRICE_ID</code>).</p>
+  <p class="small">Stripe not configured. Add <code>STRIPE_SECRET_KEY</code> and run <code>python scripts/stripe_setup.py --write-env</code>.</p>
   {% endif %}
-  <a class="btn secondary" href="/ui/saas/app">Back to dashboard</a>
+  <a class="btn secondary" href="/ui/saas/app" style="margin-top:1rem">Back to dashboard</a>
 </div>
 {% endblock %}
