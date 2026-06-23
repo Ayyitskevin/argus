@@ -59,13 +59,21 @@
     <span id="grid-loading" class="small htmx-indicator">Updating…</span>
   </form>
 
+  <div class="toolbar" style="margin-top:.5rem">
+    <button type="button" class="secondary" id="bulk-reject">Reject visible (keeper → 0)</button>
+    <button type="button" class="secondary" id="bulk-pick">Pick visible (keeper → 1)</button>
+    <span class="small" id="cull-hint">Shortcuts: <kbd>j</kbd>/<kbd>k</kbd> move · <kbd>s</kbd> save · <kbd>r</kbd> reject · <kbd>p</kbd> pick · <kbd>b</kbd> boost</span>
+  </div>
+
+  {% if auth_required %}
   <div class="card" style="background:#faf9f6; margin-bottom:.75rem">
-    <div class="small"><strong>Corrections</strong> need bearer auth when <code>ARGUS_API_TOKEN</code> is set.</div>
-    <label class="small">API token (session only, not stored)
+    <div class="small"><strong>Corrections</strong> use your session cookie — <a href="/">save API token on home</a> once, or paste below for this tab.</div>
+    <label class="small">Override token (optional)
       <input type="password" id="argus-token" style="width:220px; margin-left:.5rem"
              oninput="window.argusToken=this.value">
     </label>
   </div>
+  {% endif %}
 
   <div id="photo-grid" class="photo-grid">
     {% include "partials/photos_grid.html" %}
@@ -78,6 +86,7 @@
 
 <script>
 (function () {
+  var focusIdx = 0;
   function token() { return window.argusToken || ""; }
   function status(el, ok, msg) {
     el.innerHTML = ok
@@ -87,42 +96,101 @@
   function parseKeywords(raw) {
     return raw.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
   }
+  function photos() {
+    return Array.prototype.slice.call(document.querySelectorAll("#photo-grid .photo-card"));
+  }
+  function rowForPhoto(card) {
+    return card ? card.querySelector(".edit-row") : null;
+  }
+  function focusPhoto(idx) {
+    var list = photos();
+    if (!list.length) return;
+    focusIdx = Math.max(0, Math.min(idx, list.length - 1));
+    list.forEach(function (el, i) {
+      el.classList.toggle("photo-focus", i === focusIdx);
+    });
+    list[focusIdx].scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
   async function patchPhoto(runId, photoId, body) {
-    if (!token()) throw new Error("Set API token above to save corrections");
+    var headers = { "Content-Type": "application/json" };
+    var t = token();
+    if (t) headers["Authorization"] = "Bearer " + t;
     const res = await fetch("/runs/" + runId + "/photo/" + photoId, {
       method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + token(),
-      },
+      headers: headers,
+      credentials: "same-origin",
       body: JSON.stringify(body),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || data.detail || "request failed");
+    if (!res.ok) throw new Error(data.error || data.detail || "request failed (save token on home?)");
     return data;
   }
-  document.getElementById("photo-grid").addEventListener("click", async function (ev) {
-    const row = ev.target.closest(".edit-row");
-    if (!row) return;
+  async function saveRow(row, opts) {
+    opts = opts || {};
     const runId = row.dataset.runId;
     const photoId = row.dataset.photoId;
     const statusEl = row.querySelector(".photo-status");
     const keywords = parseKeywords(row.querySelector(".kw-input").value || "");
+    const keeperInput = row.querySelector(".keeper-input");
+    if (opts.keeper !== undefined) keeperInput.value = String(opts.keeper);
+    const keeperRaw = keeperInput.value;
+    const body = { keywords: keywords };
+    if (keeperRaw !== "") body.keeper_score = parseFloat(keeperRaw);
+    const data = await patchPhoto(runId, photoId, body);
+    status(statusEl, true, "Saved" + (data.prefs_updated ? " · prefs updated" : ""));
+    return data;
+  }
+  async function boostRow(row) {
+    const runId = row.dataset.runId;
+    const photoId = row.dataset.photoId;
+    const statusEl = row.querySelector(".photo-status");
+    const keywords = parseKeywords(row.querySelector(".kw-input").value || "");
+    const data = await patchPhoto(runId, photoId, { promote_keywords: keywords });
+    status(statusEl, true, data.prefs_updated ? "Promoted to prefs" : "Saved");
+  }
+  async function bulkKeeper(score) {
+    const rows = photos().map(rowForPhoto).filter(Boolean);
+    for (const row of rows) {
+      try {
+        await saveRow(row, { keeper: score });
+      } catch (err) {
+        status(row.querySelector(".photo-status"), false, err.message || String(err));
+      }
+    }
+  }
+  document.getElementById("photo-grid").addEventListener("click", async function (ev) {
+    const row = ev.target.closest(".edit-row");
+    if (!row) return;
     try {
       if (ev.target.classList.contains("save-photo")) {
-        const keeperRaw = row.querySelector(".keeper-input").value;
-        const body = { keywords: keywords };
-        if (keeperRaw !== "") body.keeper_score = parseFloat(keeperRaw);
-        const data = await patchPhoto(runId, photoId, body);
-        status(statusEl, true, "Saved" + (data.prefs_updated ? " · prefs updated" : ""));
+        await saveRow(row);
       } else if (ev.target.classList.contains("boost-photo")) {
-        const data = await patchPhoto(runId, photoId, { promote_keywords: keywords });
-        status(statusEl, true, data.prefs_updated ? "Promoted to prefs" : "Saved");
+        await boostRow(row);
       }
     } catch (err) {
-      status(statusEl, false, err.message || String(err));
+      status(row.querySelector(".photo-status"), false, err.message || String(err));
     }
   });
+  document.getElementById("bulk-reject").addEventListener("click", function () { bulkKeeper(0); });
+  document.getElementById("bulk-pick").addEventListener("click", function () { bulkKeeper(1); });
+  document.addEventListener("keydown", async function (ev) {
+    if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA" || ev.target.tagName === "SELECT")) return;
+    const list = photos();
+    if (!list.length) return;
+    const row = rowForPhoto(list[focusIdx]);
+    if (!row) return;
+    if (ev.key === "j") { focusPhoto(focusIdx + 1); ev.preventDefault(); return; }
+    if (ev.key === "k") { focusPhoto(focusIdx - 1); ev.preventDefault(); return; }
+    try {
+      if (ev.key === "s") { await saveRow(row); ev.preventDefault(); }
+      else if (ev.key === "r") { await saveRow(row, { keeper: 0 }); ev.preventDefault(); }
+      else if (ev.key === "p") { await saveRow(row, { keeper: 1 }); ev.preventDefault(); }
+      else if (ev.key === "b") { await boostRow(row); ev.preventDefault(); }
+    } catch (err) {
+      status(row.querySelector(".photo-status"), false, err.message || String(err));
+    }
+  });
+  focusPhoto(0);
 })();
 </script>
 {% endblock %}

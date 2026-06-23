@@ -23,6 +23,11 @@
   <div class="nav" style="margin-top:1rem">
     <a href="/ui/jobs">← all jobs</a>
     {% if run_id %} · <a href="/runs/{{ run_id }}"><strong>Open run #{{ run_id }} →</strong></a>{% endif %}
+    {% if job.status in ['failed', 'dead_letter'] %}
+    · <form method="post" action="/ui/jobs/{{ job.id }}/retry" style="display:inline">
+        <button type="submit" class="secondary">Retry job</button>
+      </form>
+    {% endif %}
   </div>
 </div>
 

@@ -126,3 +126,16 @@ def test_photos_grid_partial_supports_filters(sample_image):
     grid = client.get(f"/runs/{run_id}/photos-grid?sort=keeper&min_keeper=0")
     assert grid.status_code == 200
     assert "photo-" in grid.text
+
+
+def test_patch_photo_accepts_ui_cookie(sample_image):
+    from app.auth import UI_TOKEN_COOKIE
+
+    run_id = _analyze_with_client(sample_image)
+    photo_id = db.get_photos_for_run(run_id)[0]["id"]
+    client.cookies.set(UI_TOKEN_COOKIE, "phase7-test-token")
+    ok = client.patch(
+        f"/runs/{run_id}/photo/{photo_id}",
+        json={"keeper_score": 0.88},
+    )
+    assert ok.status_code == 200, ok.text

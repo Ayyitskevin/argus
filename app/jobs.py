@@ -15,6 +15,21 @@ def should_track_costs() -> bool:
     return config.CLOUD_BACKEND != "disabled"
 
 
+RETRYABLE_STATUSES = frozenset({"failed", "dead_letter"})
+
+
+def retry_job(job_id: str) -> dict:
+    """Re-queue a terminal failed job for another worker pass."""
+    job = db.get_job(job_id, tenant_id=db.GLOBAL_SCOPE)
+    if not job:
+        raise LookupError("job not found")
+    if job["status"] not in RETRYABLE_STATUSES:
+        raise ValueError(f"job status {job['status']} is not retryable")
+    db.update_job(job_id, status="queued", error=None, retry_count=0)
+    log.info("Job %s manually requeued", job_id)
+    return {"ok": True, "job_id": job_id, "status": "queued"}
+
+
 def _notify(job_id: str, *, status: str, result: dict | None = None, error: str | None = None) -> None:
     job = db.get_job(job_id, tenant_id=db.GLOBAL_SCOPE)
     if job:

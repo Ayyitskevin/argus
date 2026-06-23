@@ -34,3 +34,9 @@ Open http://127.0.0.1:8010
 - Results appear in the UI and are stored in `data/argus.db`.
 
 See `docs/PHASE-0.md` for exact scope and success criteria.
+
+## Lightroom export (Phase 8)
+
+Install `plugins/lightroom/Argus.lrplugin` in Lightroom Classic — post-export hook calls
+`docs/lightroom_export_stub.py` over tailnet and writes sidecars locally.
+See [`plugins/lightroom/README.md`](plugins/lightroom/README.md).

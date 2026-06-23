@@ -1,5 +1,5 @@
 {% for p in photos %}
-<article class="photo" id="photo-{{ p.id }}">
+<article class="photo photo-card" id="photo-{{ p.id }}" tabindex="-1">
   <a class="photo-thumb" href="/thumb/{{ p.id }}" target="_blank" title="Open thumbnail">
     <img src="/thumb/{{ p.id }}" alt="{{ p.basename }}" loading="lazy">
   </a>

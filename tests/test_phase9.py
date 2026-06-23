@@ -117,3 +117,20 @@ def test_fail_job_helper_increments_metrics():
     _fail_job(job_id, "synthetic failure")
     after = metrics.snapshot()["counters"]["jobs_retried"]
     assert after == before + 1
+
+
+def test_manual_job_retry_api():
+    job_id = db.create_job("/no/such/folder", source="manual-retry")
+    job = db.get_job(job_id)
+    process_job(job)
+    process_job(db.get_job(job_id))
+    dead = db.get_job(job_id)
+    assert dead["status"] == "dead_letter"
+
+    denied = client.post(f"/jobs/{job_id}/retry")
+    assert denied.status_code == 401
+
+    ok = client.post(f"/jobs/{job_id}/retry", headers=AUTH)
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["status"] == "queued"
+    assert db.get_job(job_id)["retry_count"] == 0

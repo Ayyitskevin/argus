@@ -26,7 +26,7 @@ from . import metering, tenants
 from .metering import MeteringError
 from .tenants import TenantError
 from .callbacks import is_allowed_callback_url
-from .jobs import JobWorker
+from .jobs import JobWorker, retry_job
 from .sidecars import write_sidecar
 from .vision import make_thumbnail
 from .vision_status import vision_status
@@ -593,6 +593,28 @@ def ui_job_detail(request: Request, job_id: str):
     )
 
 
+@app.post("/ui/jobs/{job_id}/retry")
+def ui_retry_job(request: Request, job_id: str):
+    ctx = _request_auth(request)
+    if get_job_for_ctx(job_id, ctx) is None:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            _ui_context(title="Not found", message=f"job not found: {job_id}", status_code=404),
+            status_code=404,
+        )
+    try:
+        retry_job(job_id)
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            _ui_context(title="Retry failed", message=str(exc), status_code=400),
+            status_code=400,
+        )
+    return RedirectResponse(f"/ui/jobs/{job_id}", status_code=303)
+
+
 @app.post("/import/mise-project", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
 def import_mise_project(
     mise_project_id: int = Form(...),
@@ -1041,6 +1063,18 @@ def get_job(job_id: str, request: Request):
     if not job:
         return error("job not found", 404)
     return job
+
+
+@app.post("/jobs/{job_id}/retry", response_class=JSONResponse)
+def retry_job_endpoint(job_id: str, ctx: AuthContext = Depends(require_bearer)):
+    if get_job_for_ctx(job_id, ctx) is None:
+        return error("job not found", 404)
+    try:
+        return retry_job(job_id)
+    except LookupError:
+        return error("job not found", 404)
+    except ValueError as exc:
+        return error(str(exc), 400)
 
 
 @app.get("/preferences", response_class=JSONResponse)
