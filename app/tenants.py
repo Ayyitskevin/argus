@@ -20,7 +20,8 @@ def _hash_key(raw_key: str) -> str:
 
 
 def generate_api_key(tenant_id: str) -> str:
-    token = secrets.token_urlsafe(24)
+    # Hex-only token so tenant_id can be parsed via rsplit("_", 1).
+    token = secrets.token_hex(24)
     return f"{KEY_PREFIX}{tenant_id}_{token}"
 
 
@@ -32,7 +33,9 @@ def tenant_id_from_key(raw_key: str) -> str | None:
     if not raw_key.startswith(KEY_PREFIX):
         return None
     rest = raw_key[len(KEY_PREFIX) :]
-    tenant_id, _, _token = rest.partition("_")
+    if "_" not in rest:
+        return None
+    tenant_id, _token = rest.rsplit("_", 1)
     return tenant_id or None
 
 
@@ -47,6 +50,8 @@ def create_tenant(
     tid = tenant_id.strip().lower().replace(" ", "-")
     if not tid:
         raise TenantError("tenant id required")
+    if "_" in tid:
+        raise TenantError("tenant id must not contain underscores (reserved for API key format)")
     if db.get_tenant(tid):
         raise TenantError(f"tenant already exists: {tid}")
     return db.create_tenant(

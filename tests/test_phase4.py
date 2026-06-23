@@ -15,6 +15,7 @@ os.environ["ARGUS_QUEUE_ENABLED"] = "false"
 os.environ["ARGUS_DATA_DIR"] = _TMP
 
 from app import config, db, service, vision  # noqa: E402
+from app.auth_context import set_auth_context  # noqa: E402
 from app.main import app  # noqa: E402
 
 client = TestClient(app)
@@ -24,6 +25,15 @@ AUTH = {"Authorization": "Bearer phase4-test-token"}
 @pytest.fixture(autouse=True)
 def enable_auth(monkeypatch):
     monkeypatch.setattr(config, "API_TOKEN", "phase4-test-token")
+    monkeypatch.setattr(config, "SAAS_MODE", False)
+    monkeypatch.setattr(config, "QUEUE_ENABLED", False)
+    monkeypatch.setattr(config, "DATA_DIR", Path(_TMP))
+    monkeypatch.setattr(config, "DB_PATH", Path(_TMP) / "argus.db")
+    db._SCHEMA_READY = False
+    db.init()
+    set_auth_context(None)
+    yield
+    set_auth_context(None)
 
 
 @pytest.fixture(scope="module")
@@ -56,16 +66,18 @@ def test_metrics_increment_on_analyze(sample_image):
 def test_history_stats_aggregate_keywords_and_shot_types(sample_image):
     folder = str(Path(sample_image).parent)
     for idx in range(3):
-        client.post(
+        single = client.post(
             "/analyze",
             data={"path": sample_image, "client_id": "platekit"},
             headers=AUTH,
         )
-    client.post(
+        assert single.status_code == 200, single.text
+    folder_resp = client.post(
         "/analyze-folder",
         data={"folder": folder, "limit": 2, "client_id": "platekit"},
         headers=AUTH,
     )
+    assert folder_resp.status_code == 200, folder_resp.text
 
     stats = db.get_client_history_stats("platekit")
     assert stats["num_runs"] >= 4

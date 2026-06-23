@@ -28,6 +28,8 @@ from .jobs import JobWorker
 from .sidecars import write_sidecar
 from .vision import make_thumbnail
 from .vision_status import vision_status
+from . import saas
+from .saas import assert_upload_only, get_full_run_for_ctx, get_job_for_ctx, tenant_scope, tenant_upload_path
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -87,6 +89,7 @@ class JobCreate(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    saas.validate_saas_startup()
     db.init()
     worker = JobWorker()
     worker.start()
@@ -98,7 +101,12 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="argus / photometa", version="phase10", lifespan=lifespan)
+app.middleware("http")(saas.saas_auth_middleware)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+def _request_auth(request: Request) -> AuthContext | None:
+    return getattr(request.state, "auth", None)
 
 
 def error(message: str, status_code: int) -> JSONResponse:
@@ -117,6 +125,7 @@ def _enqueue_folder_job(
     client_id: str | None,
     callback_url: str | None,
     recursive: bool,
+    tenant_id: str | None = None,
     extra: dict | None = None,
 ) -> JSONResponse:
     ok, reason = service.queue_accepting_jobs()
@@ -137,6 +146,7 @@ def _enqueue_folder_job(
         client_id=client_id,
         callback_url=callback_url,
         recursive=recursive,
+        tenant_id=tenant_id,
     )
     response = {
         "job_id": job_id,
@@ -200,8 +210,9 @@ def client_history(client_id: str):
 
 
 @app.get("/thumb/{photo_id}")
-def get_thumb(photo_id: int):
-    image_path = db.get_photo_image_path(photo_id)
+def get_thumb(photo_id: int, request: Request):
+    ctx = _request_auth(request)
+    image_path = db.get_photo_image_path(photo_id, tenant_id=tenant_scope(ctx))
     if not image_path:
         return error("photo not found", 404)
 
@@ -219,7 +230,11 @@ def get_thumb(photo_id: int):
 
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    recent = [dict(row) for row in db.list_recent_runs(limit=6)]
+    ctx = _request_auth(request)
+    recent = [
+        dict(row)
+        for row in db.list_recent_runs(limit=6, tenant_id=tenant_scope(ctx))
+    ]
     return templates.TemplateResponse(
         request,
         "index.html",
@@ -237,6 +252,13 @@ async def analyze_single(
     client_id: Optional[str] = Form(None),
     ctx: AuthContext = Depends(require_bearer),
 ):
+    try:
+        assert_upload_only(ctx, has_file=file is not None, has_path=bool(path))
+    except Exception as exc:
+        if hasattr(exc, "status_code"):
+            return error(exc.detail, exc.status_code)
+        raise
+
     if not file and not path:
         return error("provide file or local path", 400)
 
@@ -244,7 +266,10 @@ async def analyze_single(
     try:
         if file is not None:
             safe_name = Path(file.filename or "upload.jpg").name
-            tmp_path = config.DATA_DIR / f"upload_{uuid.uuid4().hex}_{safe_name}"
+            if ctx.tenant_id:
+                tmp_path = tenant_upload_path(ctx.tenant_id, safe_name)
+            else:
+                tmp_path = config.DATA_DIR / f"upload_{uuid.uuid4().hex}_{safe_name}"
             tmp_path.write_bytes(await file.read())
             image_path = tmp_path
         else:
@@ -289,6 +314,18 @@ def analyze_folder_endpoint(
     callback_url: Optional[str] = Form(None),
     ctx: AuthContext = Depends(require_bearer),
 ):
+    try:
+        assert_upload_only(
+            ctx,
+            has_file=False,
+            has_path=bool(folder),
+            has_folder=bool(folder or mise_gallery_id or mise_project_id),
+        )
+    except Exception as exc:
+        if hasattr(exc, "status_code"):
+            return error(exc.detail, exc.status_code)
+        raise
+
     try:
         result = service.perform_folder_analyze(
             folder=folder,
@@ -438,7 +475,11 @@ def ui_logout():
 
 @app.get("/ui/jobs", response_class=HTMLResponse)
 def ui_jobs(request: Request, status: Optional[str] = Query(None), limit: int = Query(30, ge=1, le=200)):
-    jobs = [dict(row) for row in db.list_jobs(limit, status=status)]
+    ctx = _request_auth(request)
+    jobs = [
+        dict(row)
+        for row in db.list_jobs(limit, status=status, tenant_id=tenant_scope(ctx))
+    ]
     counts = {
         "queued": db.count_jobs_by_status("queued"),
         "running": db.count_jobs_by_status("running"),
@@ -455,7 +496,8 @@ def ui_jobs(request: Request, status: Optional[str] = Query(None), limit: int = 
 
 @app.get("/ui/jobs/{job_id}", response_class=HTMLResponse)
 def ui_job_detail(request: Request, job_id: str):
-    job = db.get_job(job_id)
+    ctx = _request_auth(request)
+    job = get_job_for_ctx(job_id, ctx)
     if not job:
         return templates.TemplateResponse(
             request,
@@ -571,9 +613,16 @@ def _run_review_context(data: dict, **filters) -> dict:
 
 @app.get("/runs/compare", response_class=JSONResponse)
 def compare_runs(
+    request: Request,
     a: int = Query(..., description="first run id"),
     b: int = Query(..., description="second run id"),
 ):
+    ctx = _request_auth(request)
+    scope = tenant_scope(ctx)
+    if scope and (
+        db.get_run(a, tenant_id=scope) is None or db.get_run(b, tenant_id=scope) is None
+    ):
+        return error("one or both runs not found", 404)
     result = service.compare_runs(a, b)
     if result is None:
         return error("one or both runs not found", 404)
@@ -582,7 +631,8 @@ def compare_runs(
 
 @app.get("/runs/{run_id}", response_class=HTMLResponse)
 def view_run(run_id: int, request: Request):
-    data = db.get_full_run(run_id)
+    ctx = _request_auth(request)
+    data = get_full_run_for_ctx(run_id, ctx)
     if not data:
         return HTMLResponse("Run not found", status_code=404)
     return templates.TemplateResponse(
@@ -601,7 +651,8 @@ def run_photos_grid(
     keyword: Optional[str] = Query(None),
     min_keeper: Optional[float] = Query(None),
 ):
-    data = db.get_full_run(run_id)
+    auth_ctx = _request_auth(request)
+    data = get_full_run_for_ctx(run_id, auth_ctx)
     if not data:
         return HTMLResponse("Run not found", status_code=404)
     ctx = _run_review_context(
@@ -617,9 +668,15 @@ def run_photos_grid(
 @app.patch(
     "/runs/{run_id}/photo/{photo_id}",
     response_class=JSONResponse,
-    dependencies=[Depends(require_bearer)],
 )
-def patch_run_photo(run_id: int, photo_id: int, patch: PhotoPatch):
+def patch_run_photo(
+    run_id: int,
+    photo_id: int,
+    patch: PhotoPatch,
+    ctx: AuthContext = Depends(require_bearer),
+):
+    if get_full_run_for_ctx(run_id, ctx) is None:
+        return error("run not found", 404)
     if not any(
         value is not None
         for value in (
@@ -656,17 +713,23 @@ def patch_run_photo(run_id: int, photo_id: int, patch: PhotoPatch):
 
 
 @app.get("/runs", response_class=JSONResponse)
-def list_runs(include_archived: bool = Query(False)):
+def list_runs(request: Request, include_archived: bool = Query(False)):
+    ctx = _request_auth(request)
     return {
         "runs": [
             dict(row)
-            for row in db.list_recent_runs(include_archived=include_archived)
+            for row in db.list_recent_runs(
+                include_archived=include_archived,
+                tenant_id=tenant_scope(ctx),
+            )
         ]
     }
 
 
-@app.post("/jobs", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
-def create_job_endpoint(body: JobCreate):
+@app.post("/jobs", response_class=JSONResponse)
+def create_job_endpoint(body: JobCreate, ctx: AuthContext = Depends(require_bearer)):
+    if config.SAAS_MODE and not ctx.is_admin:
+        return error("SaaS tenants cannot enqueue folder jobs; use POST /analyze with file upload", 403)
     path, err = service.validate_job_create(folder=body.folder, callback_url=body.callback_url)
     if err:
         return error(err, 400 if "callback" in err else 404)
@@ -685,6 +748,7 @@ def create_job_endpoint(body: JobCreate):
             sidecar_dir=body.sidecar_dir,
             client_id=body.client_id,
             recursive=body.recursive,
+            tenant=ctx.tenant,
         )
         metrics.inc("analyze_folder")
         metrics.inc("photos_analyzed", result["count"])
@@ -701,12 +765,19 @@ def create_job_endpoint(body: JobCreate):
         client_id=body.client_id,
         callback_url=body.callback_url,
         recursive=body.recursive,
+        tenant_id=ctx.tenant_id,
         extra={"client_id": body.client_id} if body.client_id else None,
     )
 
 
-@app.get("/runs/{run_id}/manifest.json", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
-def run_manifest(run_id: int, sidecar_dir: Optional[str] = Query(None)):
+@app.get("/runs/{run_id}/manifest.json", response_class=JSONResponse)
+def run_manifest(
+    run_id: int,
+    sidecar_dir: Optional[str] = Query(None),
+    ctx: AuthContext = Depends(require_bearer),
+):
+    if get_full_run_for_ctx(run_id, ctx) is None:
+        return error("run not found", 404)
     manifest = service.build_run_manifest(run_id, sidecar_dir=sidecar_dir)
     if not manifest:
         return error("run not found", 404)
@@ -716,28 +787,29 @@ def run_manifest(run_id: int, sidecar_dir: Optional[str] = Query(None)):
 @app.post(
     "/runs/{run_id}/archive",
     response_class=JSONResponse,
-    dependencies=[Depends(require_bearer)],
 )
-def archive_run_endpoint(run_id: int):
+def archive_run_endpoint(run_id: int, ctx: AuthContext = Depends(require_bearer)):
+    if get_full_run_for_ctx(run_id, ctx) is None:
+        return error("run not found", 404)
     if not db.archive_run(run_id):
-        if db.get_run(run_id) is None:
+        if db.get_run(run_id, tenant_id=tenant_scope(ctx)) is None:
             return error("run not found", 404)
         return error("run already archived", 409)
     metrics.inc("runs_archived")
     return {"ok": True, "run_id": run_id, "archived": True}
 
 
-@app.get("/runs/{run_id}/export", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
-def export_run(run_id: int):
-    data = db.get_full_run(run_id)
+@app.get("/runs/{run_id}/export", response_class=JSONResponse)
+def export_run(run_id: int, ctx: AuthContext = Depends(require_bearer)):
+    data = get_full_run_for_ctx(run_id, ctx)
     if not data:
         return error("run not found", 404)
     return data
 
 
-@app.get("/runs/{run_id}/export.csv", dependencies=[Depends(require_bearer)])
-def export_run_csv(run_id: int):
-    data = db.get_full_run(run_id)
+@app.get("/runs/{run_id}/export.csv")
+def export_run_csv(run_id: int, ctx: AuthContext = Depends(require_bearer)):
+    data = get_full_run_for_ctx(run_id, ctx)
     if not data:
         return error("run not found", 404)
 
@@ -780,8 +852,9 @@ def export_run_csv(run_id: int):
 
 
 @app.get("/runs/{run_id}/photo/{photo_id}/sidecar", response_class=JSONResponse)
-def photo_sidecar(run_id: int, photo_id: int):
-    data = db.get_full_run(run_id)
+def photo_sidecar(run_id: int, photo_id: int, request: Request):
+    ctx = _request_auth(request)
+    data = get_full_run_for_ctx(run_id, ctx)
     if not data:
         return error("run not found", 404)
     for photo in data.get("photos", []):
@@ -793,10 +866,13 @@ def photo_sidecar(run_id: int, photo_id: int):
 @app.post(
     "/runs/{run_id}/write-sidecars",
     response_class=JSONResponse,
-    dependencies=[Depends(require_bearer)],
 )
-def write_sidecars_for_run(run_id: int, sidecar_dir: Optional[str] = Form(None)):
-    data = db.get_full_run(run_id)
+def write_sidecars_for_run(
+    run_id: int,
+    sidecar_dir: Optional[str] = Form(None),
+    ctx: AuthContext = Depends(require_bearer),
+):
+    data = get_full_run_for_ctx(run_id, ctx)
     if not data:
         return error("run not found", 404)
     written = []
@@ -807,11 +883,12 @@ def write_sidecars_for_run(run_id: int, sidecar_dir: Optional[str] = Form(None))
 
 
 @app.get("/jobs/costs", response_class=JSONResponse)
-def get_costs(summary: bool = False):
+def get_costs(request: Request, summary: bool = False):
+    ctx = _request_auth(request)
     costs = []
     total = 0.0
     by_project: dict[str, float] = {}
-    for row in db.list_jobs(100):
+    for row in db.list_jobs(100, tenant_id=tenant_scope(ctx)):
         job = dict(row)
         result = json.loads(job["result"]) if job.get("result") else {}
         if job["status"] != "done" or not result:
@@ -833,13 +910,20 @@ def get_costs(summary: bool = False):
 
 
 @app.get("/jobs", response_class=JSONResponse)
-def list_jobs_endpoint(limit: int = 20, status: Optional[str] = Query(None)):
-    return {"jobs": [dict(row) for row in db.list_jobs(limit, status=status)]}
+def list_jobs_endpoint(request: Request, limit: int = 20, status: Optional[str] = Query(None)):
+    ctx = _request_auth(request)
+    return {
+        "jobs": [
+            dict(row)
+            for row in db.list_jobs(limit, status=status, tenant_id=tenant_scope(ctx))
+        ]
+    }
 
 
 @app.get("/jobs/{job_id}", response_class=JSONResponse)
-def get_job(job_id: str):
-    job = db.get_job(job_id)
+def get_job(job_id: str, request: Request):
+    ctx = _request_auth(request)
+    job = get_job_for_ctx(job_id, ctx)
     if not job:
         return error("job not found", 404)
     return job
@@ -942,6 +1026,33 @@ def admin_patch_tenant(tenant_id: str, body: TenantPatch):
     if not tenant:
         return error("tenant not found", 404)
     return {"tenant": tenant}
+
+
+@app.get("/admin/tenants/{tenant_id}/keys", response_class=JSONResponse, dependencies=[Depends(require_admin)])
+def admin_list_tenant_keys(tenant_id: str):
+    if not config.SAAS_MODE:
+        return error("ARGUS_SAAS_MODE is disabled", 404)
+    if not db.get_tenant(tenant_id):
+        return error("tenant not found", 404)
+    return {"keys": db.list_tenant_keys(tenant_id)}
+
+
+@app.delete(
+    "/admin/tenants/{tenant_id}/keys/{key_id}",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_admin)],
+)
+def admin_revoke_tenant_key(tenant_id: str, key_id: str):
+    if not config.SAAS_MODE:
+        return error("ARGUS_SAAS_MODE is disabled", 404)
+    if not db.get_tenant(tenant_id):
+        return error("tenant not found", 404)
+    keys = {row["id"] for row in db.list_tenant_keys(tenant_id)}
+    if key_id not in keys:
+        return error("key not found", 404)
+    if not tenants.revoke_key(key_id):
+        return error("key already revoked", 409)
+    return {"ok": True, "key_id": key_id, "revoked": True}
 
 
 @app.post("/admin/tenants/{tenant_id}/keys", response_class=JSONResponse, dependencies=[Depends(require_admin)])

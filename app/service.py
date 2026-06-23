@@ -116,9 +116,15 @@ def persist_analysis_run(
     project_id: str | None = None,
     write_sidecars: bool = False,
     sidecar_dir: str | None = None,
+    tenant_id: str | None = None,
 ) -> dict:
     """Persist a batch of analyses and optionally write sidecars."""
-    run_id = db.create_run(source=source, model=model, project_id=project_id)
+    run_id = db.create_run(
+        source=source,
+        model=model,
+        project_id=project_id,
+        tenant_id=tenant_id,
+    )
     sidecars_written: list[str] = []
     photos: list[dict] = []
 
@@ -157,7 +163,10 @@ def analyze_single_image(
     except MeteringError as exc:
         raise AnalyzeError(exc.message, exc.status_code) from exc
     prefs = load_preferences(client_id)
-    analysis = vision.analyze_image(str(image_path), model=model, prefs=prefs, tenant=tenant)
+    try:
+        analysis = vision.analyze_image(str(image_path), model=model, prefs=prefs, tenant=tenant)
+    except MeteringError as exc:
+        raise AnalyzeError(exc.message, exc.status_code) from exc
     data = result_to_dict(analysis)
     if client_id:
         data["client_id"] = client_id
@@ -165,6 +174,7 @@ def analyze_single_image(
     run_id = db.create_run(
         source=source_label(image_path, client_id=client_id),
         model=model,
+        tenant_id=tenant_id,
     )
     db.save_photo_analysis(run_id, data)
     db.set_run_photo_count(run_id, 1)
@@ -286,6 +296,7 @@ def analyze_folder_run(
         project_id=project_id,
         write_sidecars=write_sidecars,
         sidecar_dir=sidecar_dir,
+        tenant_id=tenant_id,
     )
     if project_id:
         out["project_id"] = project_id
@@ -534,6 +545,7 @@ def perform_folder_analyze(
             client_id=client_id,
             callback_url=callback_url,
             recursive=recursive,
+            tenant_id=tenant["id"] if tenant else None,
         )
         out: dict[str, Any] = {
             "mode": "queued",

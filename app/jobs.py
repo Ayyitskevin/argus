@@ -46,6 +46,11 @@ def process_job(job: dict) -> None:
             _fail_job(job_id, f"folder not found: {job['folder']}")
             return
 
+        tenant = None
+        job_tenant_id = job.get("tenant_id")
+        if job_tenant_id:
+            tenant = db.get_tenant(job_tenant_id)
+
         result = service.analyze_folder_run(
             folder=folder,
             source=job.get("source") or str(folder),
@@ -56,6 +61,7 @@ def process_job(job: dict) -> None:
             sidecar_dir=job.get("sidecar_dir"),
             client_id=job.get("client_id"),
             recursive=bool(job.get("recursive")),
+            tenant=tenant,
         )
 
         job_result = {

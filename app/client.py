@@ -49,7 +49,15 @@ class ArgusError(Exception):
 
 
 class ArgusClient:
-    def __init__(self, base_url: str = "http://127.0.0.1:8010", timeout: int = 300, max_retries: int = 3, retry_delay: float = 1.0, config: Optional[ArgusConfig] = None):
+    def __init__(
+        self,
+        base_url: str = "http://127.0.0.1:8010",
+        timeout: int = 300,
+        max_retries: int = 3,
+        retry_delay: float = 1.0,
+        config: Optional[ArgusConfig] = None,
+        api_key: Optional[str] = None,
+    ):
         if config:
             self.base_url = config.base_url.rstrip("/")
             self.timeout = config.timeout
@@ -62,7 +70,13 @@ class ArgusClient:
             self.max_retries = max_retries
             self.retry_delay = retry_delay
             self.default_client_id = None
+        self.api_key = api_key
         self._client = httpx.Client(timeout=self.timeout)
+
+    def _auth_headers(self) -> dict[str, str]:
+        if self.api_key:
+            return {"Authorization": f"Bearer {self.api_key}"}
+        return {}
 
     def set_default_client_id(self, client_id: Optional[str]):
         """For easy runtime embedding config from mnemosyne/mise."""
@@ -73,10 +87,11 @@ class ArgusClient:
         last_err = None
         for attempt in range(self.max_retries):
             try:
+                headers = self._auth_headers()
                 if method == "post":
-                    resp = self._client.post(url, data=data, files=files)
+                    resp = self._client.post(url, data=data, files=files, headers=headers)
                 else:
-                    resp = self._client.get(url)
+                    resp = self._client.get(url, headers=headers)
                 resp.raise_for_status()
                 return resp.json()
             except (httpx.RequestError, httpx.HTTPStatusError) as e:
@@ -175,7 +190,11 @@ class ArgusClient:
         if model:
             payload["model"] = model
         try:
-            resp = self._client.post(f"{self.base_url}/jobs", json=payload)
+            resp = self._client.post(
+                f"{self.base_url}/jobs",
+                json=payload,
+                headers=self._auth_headers(),
+            )
             resp.raise_for_status()
             return resp.json()
         except (httpx.RequestError, httpx.HTTPStatusError) as exc:
@@ -299,7 +318,7 @@ class ArgusClient:
             try:
                 with open(local_file, "rb") as f:
                     files = {"file": (Path(local_file).name, f, "image/jpeg")}
-                    resp = self._client.post(url, data=data, files=files)
+                    resp = self._client.post(url, data=data, files=files, headers=self._auth_headers())
                     resp.raise_for_status()
                     return resp.json()
             except (httpx.RequestError, httpx.HTTPStatusError) as e:
@@ -401,7 +420,7 @@ class ArgusClient:
     def export_run_csv(self, run_id: int) -> str:
         """Download run as CSV (for batch mise/mnemosyne use)."""
         url = f"{self.base_url}/runs/{run_id}/export.csv"
-        resp = self._client.get(url)
+        resp = self._client.get(url, headers=self._auth_headers())
         resp.raise_for_status()
         return resp.text
 

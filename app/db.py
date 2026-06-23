@@ -129,6 +129,8 @@ def _apply_schema(con: sqlite3.Connection) -> None:
         ("jobs", "callback_url", "TEXT"),
         ("jobs", "recursive", "BOOLEAN"),
         ("jobs", "retry_count", "INTEGER"),
+        ("analysis_runs", "tenant_id", "TEXT"),
+        ("jobs", "tenant_id", "TEXT"),
     ]:
         try:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {typ}")
@@ -200,11 +202,16 @@ def _job_dict(row: sqlite3.Row | None) -> dict | None:
     return data
 
 
-def create_run(source: str | None, model: str, project_id: str | None = None) -> int:
+def create_run(
+    source: str | None,
+    model: str,
+    project_id: str | None = None,
+    tenant_id: str | None = None,
+) -> int:
     with tx() as con:
         cur = con.execute(
-            "INSERT INTO analysis_runs (source, model, project_id) VALUES (?, ?, ?)",
-            (source, model, project_id),
+            "INSERT INTO analysis_runs (source, model, project_id, tenant_id) VALUES (?, ?, ?, ?)",
+            (source, model, project_id, tenant_id),
         )
         return int(cur.lastrowid)
 
@@ -241,21 +248,34 @@ def save_photo_analysis(run_id: int, data: dict) -> int:
         return int(cur.lastrowid)
 
 
-def get_run(run_id: int) -> sqlite3.Row | None:
+def get_run(run_id: int, *, tenant_id: str | None = None) -> sqlite3.Row | None:
     con = connect()
     try:
+        if tenant_id:
+            return con.execute(
+                "SELECT * FROM analysis_runs WHERE id=? AND tenant_id=?",
+                (run_id, tenant_id),
+            ).fetchone()
         return con.execute("SELECT * FROM analysis_runs WHERE id=?", (run_id,)).fetchone()
     finally:
         close(con)
 
 
-def get_photo_image_path(photo_id: int) -> str | None:
+def get_photo_image_path(photo_id: int, *, tenant_id: str | None = None) -> str | None:
     con = connect()
     try:
-        row = con.execute(
-            "SELECT image_path FROM photo_analyses WHERE id=?",
-            (photo_id,),
-        ).fetchone()
+        if tenant_id:
+            row = con.execute(
+                """SELECT p.image_path FROM photo_analyses p
+                   JOIN analysis_runs r ON r.id = p.run_id
+                   WHERE p.id=? AND r.tenant_id=?""",
+                (photo_id, tenant_id),
+            ).fetchone()
+        else:
+            row = con.execute(
+                "SELECT image_path FROM photo_analyses WHERE id=?",
+                (photo_id,),
+            ).fetchone()
         return row["image_path"] if row else None
     finally:
         close(con)
@@ -335,15 +355,26 @@ def update_photo_analysis(
     return photo
 
 
-def list_recent_runs(limit: int = 20, *, include_archived: bool = False) -> list[sqlite3.Row]:
+def list_recent_runs(
+    limit: int = 20,
+    *,
+    include_archived: bool = False,
+    tenant_id: str | None = None,
+) -> list[sqlite3.Row]:
     con = connect()
     try:
-        if include_archived:
-            query = "SELECT * FROM analysis_runs ORDER BY id DESC LIMIT ?"
-            return con.execute(query, (limit,)).fetchall()
+        clauses: list[str] = []
+        params: list[object] = []
+        if not include_archived:
+            clauses.append("archived_at IS NULL")
+        if tenant_id:
+            clauses.append("tenant_id=?")
+            params.append(tenant_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
         return con.execute(
-            "SELECT * FROM analysis_runs WHERE archived_at IS NULL ORDER BY id DESC LIMIT ?",
-            (limit,),
+            f"SELECT * FROM analysis_runs {where} ORDER BY id DESC LIMIT ?",
+            params,
         ).fetchall()
     finally:
         close(con)
@@ -358,8 +389,8 @@ def archive_run(run_id: int) -> bool:
         return cur.rowcount > 0
 
 
-def get_full_run(run_id: int) -> dict | None:
-    run = get_run(run_id)
+def get_full_run(run_id: int, *, tenant_id: str | None = None) -> dict | None:
+    run = get_run(run_id, tenant_id=tenant_id)
     if not run:
         return None
 
@@ -388,14 +419,15 @@ def create_job(
     client_id: str | None = None,
     callback_url: str | None = None,
     recursive: bool = False,
+    tenant_id: str | None = None,
 ) -> str:
     job_id = str(uuid.uuid4())
     with tx() as con:
         con.execute(
             """INSERT INTO jobs
                (id, status, folder, limit_, write_sidecars, sidecar_dir,
-                project_id, source, model, client_id, callback_url, recursive, retry_count)
-               VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
+                project_id, source, model, client_id, callback_url, recursive, retry_count, tenant_id)
+               VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)""",
             (
                 job_id,
                 folder,
@@ -408,15 +440,22 @@ def create_job(
                 client_id,
                 callback_url,
                 int(recursive),
+                tenant_id,
             ),
         )
     return job_id
 
 
-def get_job(job_id: str) -> dict | None:
+def get_job(job_id: str, *, tenant_id: str | None = None) -> dict | None:
     con = connect()
     try:
-        row = con.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if tenant_id:
+            row = con.execute(
+                "SELECT * FROM jobs WHERE id=? AND tenant_id=?",
+                (job_id, tenant_id),
+            ).fetchone()
+        else:
+            row = con.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         return _job_dict(row)
     finally:
         close(con)
@@ -462,17 +501,27 @@ def claim_next_job() -> dict | None:
     return get_job(job_id)
 
 
-def list_jobs(limit: int = 20, status: str | None = None) -> list[sqlite3.Row]:
+def list_jobs(
+    limit: int = 20,
+    status: str | None = None,
+    *,
+    tenant_id: str | None = None,
+) -> list[sqlite3.Row]:
     con = connect()
     try:
+        clauses: list[str] = []
+        params: list[object] = []
         if status:
-            return con.execute(
-                "SELECT * FROM jobs WHERE status=? ORDER BY created_at DESC, id DESC LIMIT ?",
-                (status, limit),
-            ).fetchall()
+            clauses.append("status=?")
+            params.append(status)
+        if tenant_id:
+            clauses.append("tenant_id=?")
+            params.append(tenant_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
         return con.execute(
-            "SELECT * FROM jobs ORDER BY created_at DESC, id DESC LIMIT ?",
-            (limit,),
+            f"SELECT * FROM jobs {where} ORDER BY created_at DESC, id DESC LIMIT ?",
+            params,
         ).fetchall()
     finally:
         close(con)
@@ -883,6 +932,96 @@ def increment_tenant_usage(
             (tenant_id, period, images, cost_usd, grok_api_calls),
         )
     return get_tenant_usage(tenant_id, period)
+
+
+def charge_tenant_usage(
+    tenant_id: str,
+    *,
+    images: int,
+    cost_usd: float,
+    grok_api_calls: int = 0,
+    period: str | None = None,
+    global_cost_cap_usd: float = 0.0,
+    global_monthly_image_cap: int = 0,
+) -> dict:
+    """Atomically verify caps and increment tenant usage (BEGIN IMMEDIATE)."""
+    if images <= 0:
+        return get_tenant_usage(tenant_id, period)
+
+    period = period or _usage_period()
+    con = connect()
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        tenant_row = con.execute("SELECT * FROM tenants WHERE id=?", (tenant_id,)).fetchone()
+        if tenant_row is None:
+            con.commit()
+            return get_tenant_usage(tenant_id, period)
+
+        usage_row = con.execute(
+            "SELECT * FROM tenant_usage WHERE tenant_id=? AND period=?",
+            (tenant_id, period),
+        ).fetchone()
+        current_images = int(usage_row["images_analyzed"]) if usage_row else 0
+        current_cost = float(usage_row["cost_usd"]) if usage_row else 0.0
+
+        if global_monthly_image_cap > 0:
+            global_row = con.execute(
+                """SELECT COALESCE(SUM(images_analyzed), 0) AS images
+                   FROM tenant_usage WHERE period=?""",
+                (period,),
+            ).fetchone()
+            global_images = int(global_row["images"]) if global_row else 0
+            if global_images + images > global_monthly_image_cap:
+                con.rollback()
+                raise _UsageCapExceeded("global monthly image cap reached")
+
+        if global_cost_cap_usd > 0:
+            global_row = con.execute(
+                """SELECT COALESCE(SUM(cost_usd), 0) AS cost
+                   FROM tenant_usage WHERE period=?""",
+                (period,),
+            ).fetchone()
+            global_cost = float(global_row["cost"]) if global_row else 0.0
+            if global_cost + cost_usd > global_cost_cap_usd:
+                con.rollback()
+                raise _UsageCapExceeded("global cloud cost cap reached")
+
+        tenant = _tenant_dict(tenant_row)
+        cap_usd = tenant.get("cost_cap_usd")
+        if cap_usd is not None and cap_usd > 0 and current_cost + cost_usd > float(cap_usd):
+            con.rollback()
+            raise _UsageCapExceeded(f"tenant {tenant_id} cost cap reached")
+
+        image_cap = tenant.get("monthly_image_cap")
+        if image_cap is not None and image_cap > 0 and current_images + images > int(image_cap):
+            con.rollback()
+            raise _UsageCapExceeded(f"tenant {tenant_id} monthly image cap reached")
+
+        con.execute(
+            """INSERT INTO tenant_usage (tenant_id, period, images_analyzed, cost_usd, grok_api_calls, updated_at)
+               VALUES (?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(tenant_id, period) DO UPDATE SET
+                 images_analyzed = images_analyzed + excluded.images_analyzed,
+                 cost_usd = cost_usd + excluded.cost_usd,
+                 grok_api_calls = grok_api_calls + excluded.grok_api_calls,
+                 updated_at = datetime('now')""",
+            (tenant_id, period, images, cost_usd, grok_api_calls),
+        )
+        con.commit()
+    except _UsageCapExceeded:
+        raise
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        close(con)
+    return get_tenant_usage(tenant_id, period)
+
+
+class _UsageCapExceeded(Exception):
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(message)
 
 
 def global_usage_totals(period: str | None = None) -> dict:

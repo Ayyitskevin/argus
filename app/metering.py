@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from . import config, db
+from .db import _UsageCapExceeded
 
 
 class MeteringError(Exception):
@@ -17,11 +18,14 @@ def cloud_metering_enabled() -> bool:
     return config.SAAS_MODE and config.CLOUD_BACKEND in {"simulated", "real", "stub"}
 
 
+def caps_enforced() -> bool:
+    """Whether usage caps block requests (real + simulated backends)."""
+    return cloud_metering_enabled() and config.CLOUD_BACKEND in {"real", "simulated"}
+
+
 def enforce_caps(tenant_id: str | None, *, images: int) -> None:
-    """Raise MeteringError when caps would be exceeded (real cloud backend only)."""
-    if not cloud_metering_enabled() or config.CLOUD_BACKEND != "real":
-        return
-    if images <= 0:
+    """Pre-flight cap check before expensive vision work."""
+    if not caps_enforced() or images <= 0:
         return
 
     global_usage = db.global_usage_totals()
@@ -41,8 +45,9 @@ def enforce_caps(tenant_id: str | None, *, images: int) -> None:
         return
 
     usage = db.get_tenant_usage(tenant_id)
+    projected_cost = usage["cost_usd"] + estimate_cost(images)
     cap_usd = tenant.get("cost_cap_usd")
-    if cap_usd is not None and cap_usd > 0 and usage["cost_usd"] >= float(cap_usd):
+    if cap_usd is not None and cap_usd > 0 and projected_cost > float(cap_usd):
         raise MeteringError(f"tenant {tenant_id} cost cap reached", 402)
 
     image_cap = tenant.get("monthly_image_cap")
@@ -65,17 +70,22 @@ def record_usage(
     cost_usd: float | None = None,
     grok_api_calls: int = 0,
 ) -> dict | None:
-    """Increment tenant usage ledger when SaaS metering is active."""
+    """Atomically increment tenant usage when SaaS metering is active."""
     if not cloud_metering_enabled() or not tenant_id or images <= 0:
         return None
 
     cost = cost_usd if cost_usd is not None else estimate_cost(images)
-    return db.increment_tenant_usage(
-        tenant_id,
-        images=images,
-        cost_usd=cost,
-        grok_api_calls=grok_api_calls,
-    )
+    try:
+        return db.charge_tenant_usage(
+            tenant_id,
+            images=images,
+            cost_usd=cost,
+            grok_api_calls=grok_api_calls,
+            global_cost_cap_usd=config.CLOUD_COST_CAP_USD,
+            global_monthly_image_cap=config.CLOUD_MONTHLY_IMAGE_CAP,
+        )
+    except _UsageCapExceeded as exc:
+        raise MeteringError(exc.message, 402) from exc
 
 
 def usage_snapshot(tenant_id: str | None = None) -> dict:
