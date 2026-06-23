@@ -8,6 +8,7 @@ import base64
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +41,21 @@ class AnalysisResult(BaseModel):
 
 
 log = logging.getLogger("argus.vision")
+
+SHOT_TYPES = frozenset(
+    {
+        "wide_establishing",
+        "environmental_medium",
+        "hero_plate",
+        "detail_texture",
+        "candid_moment",
+        "portrait_subject",
+        "overhead_flatlay",
+        "action_sequence",
+        "table_scape",
+        "other",
+    }
+)
 
 SYSTEM_PROMPT = """You are an expert professional photographer and photo editor who specializes in food & beverage, restaurant, and event photography. You have 15+ years of experience culling, keywording, sequencing for albums, and preparing images for client delivery, licensing, and web use.
 
@@ -79,6 +95,72 @@ Return **only** a single valid JSON object with exactly these keys:
 
 Focus especially on what would help an album designer (mnemosyne) decide sequencing and hero selection. Be brutally honest on technical issues. Use F&B-specific language.
 """
+
+
+def normalize_shot_type(raw: str | None) -> str:
+    """Map model output to a known shot_type enum value."""
+    value = (raw or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if value in SHOT_TYPES:
+        return value
+    aliases = {
+        "hero": "hero_plate",
+        "plate": "hero_plate",
+        "detail": "detail_texture",
+        "texture": "detail_texture",
+        "wide": "wide_establishing",
+        "establishing": "wide_establishing",
+        "environment": "environmental_medium",
+        "environmental": "environmental_medium",
+        "flatlay": "overhead_flatlay",
+        "overhead": "overhead_flatlay",
+        "portrait": "portrait_subject",
+        "candid": "candid_moment",
+        "tablescape": "table_scape",
+    }
+    return aliases.get(value, "other")
+
+
+def load_prompt_examples() -> str:
+    """Optional few-shot block from ARGUS_PROMPT_EXAMPLES_FILE (JSON list of strings)."""
+    path_raw = os.environ.get("ARGUS_PROMPT_EXAMPLES_FILE", "").strip()
+    if not path_raw:
+        repo_root = Path(__file__).resolve().parent.parent
+        for candidate in (
+            repo_root / "examples" / "prompt_examples.json",
+            config.DATA_DIR / "prompt_examples.json",
+        ):
+            if candidate.is_file():
+                path_raw = str(candidate)
+                break
+        else:
+            return ""
+    path = Path(path_raw).expanduser()
+    if not path.is_file():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        log.warning("could not load prompt examples from %s: %s", path, exc)
+        return ""
+    if isinstance(data, dict):
+        lines = data.get("examples") or data.get("few_shot") or []
+    elif isinstance(data, list):
+        lines = data
+    else:
+        return ""
+    cleaned = [str(line).strip() for line in lines if str(line).strip()]
+    if not cleaned:
+        return ""
+    return "\n\nReference examples (match this specificity and tone):\n" + "\n".join(
+        f"- {line}" for line in cleaned[:6]
+    )
+
+
+def system_prompt() -> str:
+    """System prompt with optional on-disk few-shot examples."""
+    extra = load_prompt_examples()
+    return SYSTEM_PROMPT + extra if extra else SYSTEM_PROMPT
+
 
 def make_thumbnail(path: str | Path, max_side: int = 512) -> bytes:
     """Return JPEG bytes of a downscaled thumbnail (orientation-corrected).
@@ -245,7 +327,7 @@ def analyze_image(
         def _chat_and_parse(extra_hint: str = "", *, temperature: float = 0.2) -> dict:
             prompt = user_prompt + (f"\n\n{extra_hint}" if extra_hint else "")
             api_resp = chat_vision(
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=system_prompt(),
                 user_prompt=prompt,
                 image_jpeg_b64=b64,
                 model=model,
@@ -275,7 +357,7 @@ def analyze_image(
         if not isinstance(culling, dict):
             culling = {"keeper_score": 0.5, "hero_potential": 0.5, "technical_quality": "fair", "notes": str(culling)}
 
-        shot_type = (parsed.get("shot_type") or "other").strip().lower().replace(" ", "_")
+        shot_type = normalize_shot_type(parsed.get("shot_type"))
 
         culling_obj = Culling(
             keeper_score=float(culling.get("keeper_score", 0.5)),

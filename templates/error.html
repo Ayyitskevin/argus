@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card" style="border-color:#f5d0d0; background:#fff8f8">
+  <h2 style="margin-top:0">{{ title or 'Error' }}</h2>
+  <p>{{ message }}</p>
+  {% if status_code %}
+  <p class="small">HTTP {{ status_code }}</p>
+  {% endif %}
+  <p class="nav" style="margin-top:1rem"><a href="/">← home</a></p>
+</div>
+{% endblock %}

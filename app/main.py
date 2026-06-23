@@ -12,13 +12,13 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 from . import config, db, metrics, service
-from .auth import require_bearer
+from .auth import UI_TOKEN_COOKIE, require_bearer, verify_api_access
 from .callbacks import is_allowed_callback_url
 from .jobs import JobWorker
 from .sidecars import write_sidecar
@@ -41,9 +41,23 @@ templates.env.filters["basename"] = os.path.basename
 
 def _ui_context(**extra) -> dict:
     """Shared template context for HTML pages (vision banner + model)."""
-    ctx = {"model": config.VISION_MODEL, "vision": vision_status()}
+    ctx = {
+        "model": config.VISION_MODEL,
+        "vision": vision_status(),
+        "auth_required": bool(config.API_TOKEN),
+    }
     ctx.update(extra)
     return ctx
+
+
+def _analyze_folder_response(result: dict) -> JSONResponse:
+    return JSONResponse(result)
+
+
+def _redirect_after_folder_analyze(result: dict) -> RedirectResponse:
+    if result.get("mode") == "queued":
+        return RedirectResponse(f"/ui/jobs/{result['job_id']}", status_code=303)
+    return RedirectResponse(f"/runs/{result['run_id']}", status_code=303)
 
 
 class PhotoPatch(BaseModel):
@@ -261,62 +275,183 @@ def analyze_folder_endpoint(
     recursive: bool = Form(False),
     callback_url: Optional[str] = Form(None),
 ):
-    path, mise_info, attempted = service.resolve_mise_folder(
-        folder=folder,
-        mise_gallery_id=mise_gallery_id,
-        mise_project_id=mise_project_id,
-    )
-    if path is None:
-        return error("folder (or mise_gallery_id with ARGUS_MISE_MEDIA_ROOT) required", 400)
-    if not path.is_dir():
-        return error(f"folder not found or not a dir: {attempted}", 400)
-
-    project_id = str(mise_project_id) if mise_project_id is not None else None
-    source = service.source_label(path, mise_info=mise_info, client_id=client_id)
-    model_name = model or config.VISION_MODEL
-
-    if config.QUEUE_ENABLED:
-        extra = {}
-        if mise_info:
-            extra["mise"] = mise_info
-        if project_id:
-            extra["project_id"] = project_id
-        if client_id:
-            extra["client_id"] = client_id
-        return _enqueue_folder_job(
-            path=path,
-            source=source,
-            model_name=model_name,
-            limit=limit or 20,
+    try:
+        result = service.perform_folder_analyze(
+            folder=folder,
+            model=model,
+            limit=limit,
             write_sidecars=write_sidecars,
             sidecar_dir=sidecar_dir,
-            project_id=project_id,
+            mise_gallery_id=mise_gallery_id,
+            mise_project_id=mise_project_id,
             client_id=client_id,
-            callback_url=callback_url,
             recursive=recursive,
-            extra=extra,
+            callback_url=callback_url,
+        )
+    except service.AnalyzeError as exc:
+        return error(exc.message, exc.status_code)
+    return _analyze_folder_response(result)
+
+
+@app.post("/ui/analyze-folder")
+def ui_analyze_folder(
+    request: Request,
+    folder: Optional[str] = Form(None),
+    model: Optional[str] = Form(None),
+    limit: int = Form(20),
+    write_sidecars: bool = Form(False),
+    sidecar_dir: Optional[str] = Form(None),
+    client_id: Optional[str] = Form(None),
+    recursive: Optional[str] = Form(None),
+    api_token: Optional[str] = Form(None),
+):
+    verify_api_access(request, form_token=api_token)
+    is_recursive = str(recursive or "").lower() in {"true", "1", "on", "yes"}
+    try:
+        result = service.perform_folder_analyze(
+            folder=folder,
+            model=model,
+            limit=limit,
+            write_sidecars=write_sidecars,
+            sidecar_dir=sidecar_dir,
+            client_id=client_id,
+            recursive=is_recursive,
+        )
+    except service.AnalyzeError as exc:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            _ui_context(
+                title="Analyze failed",
+                message=exc.message,
+                status_code=exc.status_code,
+            ),
+            status_code=exc.status_code,
+        )
+    return _redirect_after_folder_analyze(result)
+
+
+@app.post("/ui/analyze")
+async def ui_analyze_single(
+    request: Request,
+    file: Optional[UploadFile] = File(None),
+    path: Optional[str] = Form(None),
+    model: Optional[str] = Form(None),
+    client_id: Optional[str] = Form(None),
+    api_token: Optional[str] = Form(None),
+):
+    verify_api_access(request, form_token=api_token)
+    if not file and not path:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            _ui_context(title="Analyze failed", message="provide file or local path", status_code=400),
+            status_code=400,
         )
 
-    result = service.analyze_folder_run(
-        folder=path,
-        source=source,
-        model=model_name,
-        limit=limit,
-        project_id=project_id,
-        write_sidecars=write_sidecars,
-        sidecar_dir=sidecar_dir,
-        client_id=client_id,
-        recursive=recursive,
+    tmp_path: Path | None = None
+    try:
+        if file is not None:
+            safe_name = Path(file.filename or "upload.jpg").name
+            tmp_path = config.DATA_DIR / f"upload_{uuid.uuid4().hex}_{safe_name}"
+            tmp_path.write_bytes(await file.read())
+            image_path = tmp_path
+        else:
+            image_path = Path(path or "").expanduser().resolve()
+            if not image_path.is_file():
+                return templates.TemplateResponse(
+                    request,
+                    "error.html",
+                    _ui_context(title="Analyze failed", message=f"file not found: {path}", status_code=404),
+                    status_code=404,
+                )
+
+        out = service.analyze_single_image(
+            image_path=image_path,
+            model=model,
+            client_id=client_id,
+        )
+        metrics.inc("analyze_single")
+        metrics.inc("photos_analyzed")
+        return RedirectResponse(f"/runs/{out['run_id']}", status_code=303)
+    finally:
+        if tmp_path and tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+
+
+@app.post("/ui/token")
+def ui_set_token(
+    request: Request,
+    api_token: str = Form(...),
+):
+    if not config.API_TOKEN:
+        return RedirectResponse("/", status_code=303)
+    if api_token.strip() != config.API_TOKEN:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            _ui_context(title="Login failed", message="invalid API token", status_code=401),
+            status_code=401,
+        )
+    response = RedirectResponse("/", status_code=303)
+    response.set_cookie(
+        UI_TOKEN_COOKIE,
+        api_token.strip(),
+        httponly=True,
+        samesite="lax",
+        max_age=60 * 60 * 24 * 30,
     )
-    metrics.inc("analyze_folder")
-    metrics.inc("photos_analyzed", result["count"])
-    if mise_info:
-        result["mise"] = mise_info
-    if not write_sidecars:
-        result.pop("sidecars_written", None)
-    elif sidecar_dir:
-        result["sidecar_dir"] = sidecar_dir
-    return result
+    return response
+
+
+@app.post("/ui/logout")
+def ui_logout():
+    response = RedirectResponse("/", status_code=303)
+    response.delete_cookie(UI_TOKEN_COOKIE)
+    return response
+
+
+@app.get("/ui/jobs", response_class=HTMLResponse)
+def ui_jobs(request: Request, status: Optional[str] = Query(None), limit: int = Query(30, ge=1, le=200)):
+    jobs = [dict(row) for row in db.list_jobs(limit, status=status)]
+    counts = {
+        "queued": db.count_jobs_by_status("queued"),
+        "running": db.count_jobs_by_status("running"),
+        "done": db.count_jobs_by_status("done"),
+        "failed": db.count_jobs_by_status("failed"),
+        "dead_letter": db.count_jobs_by_status("dead_letter"),
+    }
+    return templates.TemplateResponse(
+        request,
+        "jobs.html",
+        _ui_context(jobs=jobs, job_counts=counts, filter_status=status),
+    )
+
+
+@app.get("/ui/jobs/{job_id}", response_class=HTMLResponse)
+def ui_job_detail(request: Request, job_id: str):
+    job = db.get_job(job_id)
+    if not job:
+        return templates.TemplateResponse(
+            request,
+            "error.html",
+            _ui_context(title="Not found", message=f"job not found: {job_id}", status_code=404),
+            status_code=404,
+        )
+    run_id = job.get("run_id")
+    result = {}
+    if job.get("result"):
+        try:
+            result = json.loads(job["result"]) if isinstance(job["result"], str) else job["result"]
+        except json.JSONDecodeError:
+            result = {}
+    if not run_id and isinstance(result, dict):
+        run_id = result.get("run_id")
+    return templates.TemplateResponse(
+        request,
+        "job.html",
+        _ui_context(job=job, job_result=result, run_id=run_id),
+    )
 
 
 @app.post("/import/mise-project", response_class=JSONResponse, dependencies=[Depends(require_bearer)])

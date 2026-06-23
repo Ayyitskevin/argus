@@ -1,0 +1,7 @@
+{
+  "examples": [
+    "Keeper 0.95 hero_plate: seared scallop with golden-brown crust, microgreen garnish, brown butter sauce — rim lighting, shallow DOF, asymmetric composition; notes flag any blown highlights or messy plate edge.",
+    "Keeper 0.90 detail_texture: cocktail with blood orange wheel and thyme sprig — bokeh bar background, diagonal composition; penalize plastic-looking garnish or flat fill light.",
+    "Keeper 0.10 other: abstract gradient or design mockup, not camera work — keywords should not invent food subjects; keeper_score must stay near zero."
+  ]
+}

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">Job queue</h2>
+  <p class="small">Folder analyzes queue when <code>ARGUS_QUEUE_ENABLED=true</code>. Refresh to update status.</p>
+  <div class="toolbar">
+    <a class="btn secondary" href="/ui/jobs">All ({{ job_counts.queued + job_counts.running + job_counts.done + job_counts.failed + job_counts.dead_letter }})</a>
+    <a class="btn secondary" href="/ui/jobs?status=queued">Queued ({{ job_counts.queued }})</a>
+    <a class="btn secondary" href="/ui/jobs?status=running">Running ({{ job_counts.running }})</a>
+    <a class="btn secondary" href="/ui/jobs?status=done">Done ({{ job_counts.done }})</a>
+    <a class="btn secondary" href="/ui/jobs?status=dead_letter">Dead letter ({{ job_counts.dead_letter }})</a>
+    <a class="btn" href="/">New analyze</a>
+  </div>
+</div>
+
+<div class="card">
+  {% if jobs %}
+  <table style="width:100%; border-collapse:collapse; font-size:.86rem">
+    <thead>
+      <tr style="text-align:left; border-bottom:1px solid var(--line)">
+        <th style="padding:.4rem">Status</th>
+        <th>Folder</th>
+        <th>Limit</th>
+        <th>Created</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for j in jobs %}
+      <tr style="border-bottom:1px solid #f0ede6">
+        <td style="padding:.45rem .4rem"><span class="badge">{{ j.status }}</span></td>
+        <td style="word-break:break-all">{{ j.folder }}</td>
+        <td>{{ j.limit_ }}</td>
+        <td class="small">{{ j.created_at }}</td>
+        <td><a href="/ui/jobs/{{ j.id }}">view</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="small">No jobs{% if filter_status %} with status <strong>{{ filter_status }}</strong>{% endif %}.</p>
+  {% endif %}
+</div>
+{% endblock %}

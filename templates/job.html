@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if job.status in ['queued', 'running'] %}
+<meta http-equiv="refresh" content="3">
+{% endif %}
+
+<div class="card">
+  <h2 style="margin-top:0">Job <span class="small">{{ job.id[:8] }}…</span></h2>
+  <p><span class="badge">{{ job.status }}</span>
+    {% if job.retry_count %} · retry {{ job.retry_count }}{% endif %}
+  </p>
+  <div class="small" style="margin-top:.5rem">
+    <div><strong>Folder:</strong> {{ job.folder }}</div>
+    <div><strong>Limit:</strong> {{ job.limit_ }} · <strong>Model:</strong> {{ job.model or model }}</div>
+    {% if job.client_id %}<div><strong>Client:</strong> {{ job.client_id }}</div>{% endif %}
+    {% if job.recursive %}<div><strong>Recursive:</strong> yes</div>{% endif %}
+    <div><strong>Created:</strong> {{ job.created_at }} · <strong>Updated:</strong> {{ job.updated_at }}</div>
+  </div>
+  {% if job.error %}
+  <pre style="margin-top:.75rem; color:#a11">{{ job.error }}</pre>
+  {% endif %}
+  <div class="nav" style="margin-top:1rem">
+    <a href="/ui/jobs">← all jobs</a>
+    {% if run_id %} · <a href="/runs/{{ run_id }}"><strong>Open run #{{ run_id }} →</strong></a>{% endif %}
+  </div>
+</div>
+
+{% if job.status in ['queued', 'running'] %}
+<div class="card" style="background:#f8fbf9">
+  <p class="small" style="margin:0">Processing… this page auto-refreshes every 3s.</p>
+</div>
+{% elif job.status == 'done' and run_id %}
+<div class="card">
+  <p>Analysis complete — {{ job_result.count or '?' }} photos.</p>
+  <a class="btn" href="/runs/{{ run_id }}">Cull run #{{ run_id }}</a>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,6 +1,24 @@
 {% extends "base.html" %}
 
 {% block content %}
+{% if auth_required %}
+<div class="card" style="background:#faf9f6">
+  <h3 style="margin-top:0">API token</h3>
+  <p class="small">Required for analyze and corrections when <code>ARGUS_API_TOKEN</code> is set. Stored in a browser cookie for 30 days.</p>
+  <form action="/ui/token" method="post" class="toolbar">
+    <label style="flex:1; max-width:320px">
+      <span>Token</span>
+      <input type="password" name="api_token" autocomplete="current-password" required>
+    </label>
+    <label style="justify-content:end">
+      <span>&nbsp;</span>
+      <button type="submit">Save session</button>
+    </label>
+    <a class="btn secondary" href="/ui/logout">Clear</a>
+  </form>
+</div>
+{% endif %}
+
 {% if vision %}
 <div class="card" style="border-color: {% if vision.ready %}var(--accent-soft){% else %}#f5d0d0{% endif %}; background: {% if vision.ready %}#f8fbf9{% else %}#fff8f8{% endif %};">
   <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; flex-wrap:wrap;">
@@ -23,6 +41,7 @@
     <div class="small">Est. cost: <strong>${{ "%.4f"|format(vision.grok_cost_usd) }}</strong></div>
     {% endif %}
     <a class="btn secondary" href="/vision/status" style="font-size:.78rem; padding:.3rem .6rem">JSON status</a>
+    <a class="btn secondary" href="/ui/jobs" style="font-size:.78rem; padding:.3rem .6rem">Jobs</a>
     {% if recent_runs %}
     <a class="btn" href="/runs/{{ recent_runs[0].id }}" style="font-size:.78rem; padding:.3rem .6rem">Latest run →</a>
     {% endif %}
@@ -33,11 +52,11 @@
 <div class="card">
   <h2>Cull &amp; analyze</h2>
   <p class="small">
-    Point Argus at a folder of edited photos. Results land in SQLite and open in the
+    Point Argus at a folder of edited photos. Results open in the
     <strong>review UI</strong> for keeper scoring and keyword edits.
   </p>
 
-  <form action="/analyze-folder" method="post" style="margin-bottom: 1.25rem;">
+  <form action="/ui/analyze-folder" method="post" style="margin-bottom: 1.25rem;">
     <div class="toolbar">
       <label style="flex:1; min-width:220px">
         <span>Local folder path</span>
@@ -62,14 +81,19 @@
         <button type="submit">Analyze folder</button>
       </label>
     </div>
-    <div class="small" style="margin-top: .3rem">Supported: jpg, png, heic, webp, tiff. Jobs queue when ARGUS_QUEUE_ENABLED=true.</div>
+    {% if auth_required %}
+    <div class="small" style="margin-top:.35rem">Or paste token per submit:
+      <input type="password" name="api_token" style="width:180px; margin-left:.35rem" placeholder="Bearer token">
+    </div>
+    {% endif %}
+    <div class="small" style="margin-top: .3rem">Queued jobs → <a href="/ui/jobs">job tracker</a> → culling UI when done.</div>
   </form>
 
-  <form action="/analyze" method="post" enctype="multipart/form-data">
+  <form action="/ui/analyze" method="post" enctype="multipart/form-data">
     <div class="toolbar">
       <label style="flex:1">
         <span>Single image upload (quick test)</span>
-        <input type="file" name="file" accept="image/*">
+        <input type="file" name="file" accept="image/*" required>
       </label>
       <label>
         <span>Client ID</span>
@@ -80,6 +104,9 @@
         <button type="submit">Analyze image</button>
       </label>
     </div>
+    {% if auth_required %}
+    <input type="password" name="api_token" style="width:180px; margin-top:.35rem" placeholder="Bearer token (optional if cookie set)">
+    {% endif %}
   </form>
 </div>
 

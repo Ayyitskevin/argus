@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from . import config, db, vision
+from . import config, db, metrics, vision
 from .sidecars import write_sidecar
 from .callbacks import is_allowed_callback_url
 
@@ -447,3 +447,103 @@ def compare_runs(run_a_id: int, run_b_id: int) -> dict | None:
         else None,
         "score_changes": score_changes[:50],
     }
+
+
+class AnalyzeError(Exception):
+    """User-facing analyze validation or queue errors."""
+
+    def __init__(self, message: str, status_code: int = 400):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+
+
+def perform_folder_analyze(
+    *,
+    folder: str | None = None,
+    model: str | None = None,
+    limit: int = 20,
+    write_sidecars: bool = False,
+    sidecar_dir: str | None = None,
+    mise_gallery_id: int | None = None,
+    mise_project_id: int | None = None,
+    client_id: str | None = None,
+    recursive: bool = False,
+    callback_url: str | None = None,
+) -> dict:
+    """Shared folder analyze for JSON API and browser UI flows."""
+    path, mise_info, attempted = resolve_mise_folder(
+        folder=folder,
+        mise_gallery_id=mise_gallery_id,
+        mise_project_id=mise_project_id,
+    )
+    if path is None:
+        raise AnalyzeError(
+            "folder (or mise_gallery_id with ARGUS_MISE_MEDIA_ROOT) required",
+            400,
+        )
+    if not path.is_dir():
+        raise AnalyzeError(f"folder not found or not a dir: {attempted}", 400)
+
+    if callback_url and not is_allowed_callback_url(callback_url):
+        raise AnalyzeError("callback_url must be local or tailnet (http/https)", 400)
+
+    project_id = str(mise_project_id) if mise_project_id is not None else None
+    source = source_label(path, mise_info=mise_info, client_id=client_id)
+    model_name = model or config.VISION_MODEL
+
+    if config.QUEUE_ENABLED:
+        ok, reason = queue_accepting_jobs()
+        if not ok:
+            raise AnalyzeError(reason or "queue saturated", 503)
+
+        job_id = db.create_job(
+            str(path),
+            limit or 20,
+            write_sidecars,
+            sidecar_dir,
+            project_id=project_id,
+            source=source,
+            model=model_name,
+            client_id=client_id,
+            callback_url=callback_url,
+            recursive=recursive,
+        )
+        out: dict[str, Any] = {
+            "mode": "queued",
+            "job_id": job_id,
+            "status": "queued",
+            "source": source,
+            "recursive": recursive,
+        }
+        if callback_url:
+            out["callback_url"] = callback_url
+        if mise_info:
+            out["mise"] = mise_info
+        if project_id:
+            out["project_id"] = project_id
+        if client_id:
+            out["client_id"] = client_id
+        return out
+
+    result = analyze_folder_run(
+        folder=path,
+        source=source,
+        model=model_name,
+        limit=limit,
+        project_id=project_id,
+        write_sidecars=write_sidecars,
+        sidecar_dir=sidecar_dir,
+        client_id=client_id,
+        recursive=recursive,
+    )
+    metrics.inc("analyze_folder")
+    metrics.inc("photos_analyzed", result["count"])
+    if mise_info:
+        result["mise"] = mise_info
+    if not write_sidecars:
+        result.pop("sidecars_written", None)
+    elif sidecar_dir:
+        result["sidecar_dir"] = sidecar_dir
+    result["mode"] = "sync"
+    return result
