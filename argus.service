@@ -9,7 +9,6 @@ User=kevin-lee
 Group=kevin-lee
 WorkingDirectory=/home/kevin-lee/ai-workspace/argus
 EnvironmentFile=-/home/kevin-lee/ai-workspace/argus/.env
-Environment=ARGUS_VISION_BACKEND=mock
 Environment=ARGUS_HOST=0.0.0.0
 Environment=ARGUS_PORT=8010
 Environment=ARGUS_QUEUE_ENABLED=true

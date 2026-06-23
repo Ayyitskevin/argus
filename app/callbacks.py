@@ -79,7 +79,20 @@ def is_allowed_callback_url(url: str) -> bool:
         ip = ipaddress.ip_address(host)
         return ip.is_private or ip.is_loopback
     except ValueError:
+        # Operator Mise BASE_URL (e.g. https://kleephotography.com) on publish.
+        if parsed.scheme == "https":
+            return _resolves_to_public(host)
         return False
+
+
+def _mise_callback_headers(callback_url: str) -> dict[str, str]:
+    """Attach the shared Mise bearer when posting to /api/argus/callback."""
+    if not (config.MISE_URL and config.MISE_API_TOKEN):
+        return {}
+    path = urlparse(callback_url.strip()).path.rstrip("/")
+    if path.endswith("/api/argus/callback"):
+        return {"Authorization": f"Bearer {config.MISE_API_TOKEN}"}
+    return {}
 
 
 def fire_job_callback(job: dict, *, status: str, result: dict | None = None, error: str | None = None) -> None:
@@ -107,7 +120,11 @@ def fire_job_callback(job: dict, *, status: str, result: dict | None = None, err
             # admin API token must never be attached. follow_redirects is off so
             # a redirect can't bounce the POST to a private SSRF target.
             resp = httpx.post(
-                callback_url, json=payload, timeout=10.0, follow_redirects=False
+                callback_url,
+                json=payload,
+                headers=_mise_callback_headers(callback_url),
+                timeout=10.0,
+                follow_redirects=False,
             )
             resp.raise_for_status()
             log.info("callback delivered for job %s -> %s", job.get("id"), callback_url)
