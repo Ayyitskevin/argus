@@ -11,7 +11,6 @@ from PIL import Image
 
 _TMP = tempfile.mkdtemp(prefix="argus-phase9-")
 os.environ["ARGUS_VISION_BACKEND"] = "mock"
-os.environ["ARGUS_QUEUE_ENABLED"] = "true"
 os.environ["ARGUS_DATA_DIR"] = _TMP
 
 from app import config, db, metrics  # noqa: E402

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Phase 5 real-vision dogfood — analyze a folder with qwen3-vl (human-gated).
+"""Real-vision dogfood — analyze a folder with xAI Grok (human-gated).
 
 Usage:
-    ARGUS_VISION_BACKEND=real python scripts/dogfood_real.py /path/to/gallery --limit 5
+    ARGUS_VISION_BACKEND=grok python scripts/dogfood_real.py /path/to/gallery --limit 5
 
 If assets are missing or scratch JPEGs keep returning degenerate `{}` JSON,
 generate replacement F&B photos with Grok image generation, save under
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 import time
@@ -20,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-os.environ.setdefault("ARGUS_VISION_BACKEND", "real")
+os.environ.setdefault("ARGUS_VISION_BACKEND", "grok")
 
 from app import config  # noqa: E402
 from app.service import analyze_folder_run  # noqa: E402
@@ -31,43 +32,71 @@ def main() -> int:
     parser.add_argument("folder", type=Path)
     parser.add_argument("--limit", type=int, default=5)
     parser.add_argument("--client-id", default="dogfood")
+    parser.add_argument("--recursive", action="store_true")
+    parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="override ARGUS_DATA_DIR for isolated dogfood DB",
+    )
     args = parser.parse_args()
+
+    if args.data_dir:
+        os.environ["ARGUS_DATA_DIR"] = args.data_dir
 
     folder = args.folder.expanduser().resolve()
     if not folder.is_dir():
         print(f"Not a directory: {folder}", file=sys.stderr)
         return 1
 
-    if config.VISION_BACKEND != "real":
-        print("ARGUS_VISION_BACKEND must be 'real' for dogfood", file=sys.stderr)
+    if config.VISION_BACKEND != "grok":
+        print("ARGUS_VISION_BACKEND must be 'grok' (or 'real') for dogfood", file=sys.stderr)
+        return 1
+    if not config.XAI_API_KEY:
+        print("XAI_API_KEY must be set for Grok vision", file=sys.stderr)
         return 1
 
-    print(f"Backend: {config.VISION_BACKEND} model={config.VISION_MODEL}")
-    print(f"Folder: {folder} limit={args.limit}")
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    print(f"Backend: {config.VISION_BACKEND} model={config.VISION_MODEL}", flush=True)
+    print(f"Folder: {folder} limit={args.limit} recursive={args.recursive}", flush=True)
     started = time.time()
     result = analyze_folder_run(
         folder=folder,
-        source=f"dogfood:{folder}",
+        source=f"client:{args.client_id}|dogfood:{folder}",
         limit=args.limit,
         client_id=args.client_id,
+        recursive=args.recursive,
     )
     elapsed = time.time() - started
 
     summary = []
+    degenerate = 0
     for photo in result.get("photos", []):
         culling = photo.get("culling") or {}
+        keywords = photo.get("keywords") or []
+        if not keywords or keywords == ["analysis-failed"]:
+            degenerate += 1
         summary.append(
             {
                 "path": Path(photo["image_path"]).name,
                 "shot_type": photo.get("shot_type"),
                 "keeper": culling.get("keeper_score"),
                 "hero": culling.get("hero_potential"),
-                "keywords": (photo.get("keywords") or [])[:6],
+                "keywords": keywords[:6],
                 "alt": (photo.get("alt_text") or "")[:80],
+                "notes": (culling.get("notes") or "")[:120],
             }
         )
 
-    print(json.dumps({"run_id": result["run_id"], "count": result["count"], "elapsed_s": round(elapsed, 1), "photos": summary}, indent=2))
+    payload = {
+        "run_id": result["run_id"],
+        "count": result["count"],
+        "elapsed_s": round(elapsed, 1),
+        "degenerate": degenerate,
+        "degenerate_rate": round(degenerate / max(result["count"], 1), 3),
+        "run_url": f"/runs/{result['run_id']}",
+        "photos": summary,
+    }
+    print(json.dumps(payload, indent=2), flush=True)
     return 0
 
 

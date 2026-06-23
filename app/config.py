@@ -7,15 +7,22 @@ import os
 import logging
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(_ROOT / ".env", override=False)
+
 # Data dir for this service (db, tmp, exports, sidecars)
 DATA_DIR = Path(os.environ.get("ARGUS_DATA_DIR", Path(__file__).resolve().parent.parent / "data"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_PATH = DATA_DIR / "argus.db"
 
-# Ollama (mock by default for safety)
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-VISION_MODEL = os.environ.get("ARGUS_VISION_MODEL", "qwen3-vl:32b")
+# Vision: Grok/xAI API (mock by default for CI safety)
+XAI_API_KEY = os.environ.get("XAI_API_KEY") or None
+XAI_API_BASE = os.environ.get("XAI_API_BASE", "https://api.x.ai/v1")
+XAI_TIMEOUT = float(os.environ.get("XAI_TIMEOUT", "180"))
+VISION_MODEL = os.environ.get("ARGUS_VISION_MODEL", "grok-4-fast")
 
 # Basic server
 HOST = os.environ.get("ARGUS_HOST", "127.0.0.1")
@@ -27,9 +34,9 @@ PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".tif", ".tiff
 # Prompt / analysis tuning
 DEFAULT_MAX_TAGS = int(os.environ.get("ARGUS_MAX_TAGS", "12"))
 
-# Backend for analysis: "real" (Ollama vision) or "mock" (synthetic data, no heavy models)
-# IMPORTANT: Default and recommended for Phase 2 dev = "mock". Never change to "real" on mickey without explicit approval.
-VISION_BACKEND = os.environ.get("ARGUS_VISION_BACKEND", "mock").lower()  # "mock" or "real"
+# Backend: "mock" (CI/dev default) or "grok"/"real" (xAI Grok vision — requires XAI_API_KEY)
+_raw_backend = os.environ.get("ARGUS_VISION_BACKEND", "mock").lower()
+VISION_BACKEND = "grok" if _raw_backend == "real" else _raw_backend  # "real" alias for grok
 
 # Phase 2 service settings
 SERVICE_MODE = os.environ.get("ARGUS_SERVICE_MODE", "standalone").lower()  # standalone | odysseus-style

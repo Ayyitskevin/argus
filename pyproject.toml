@@ -9,7 +9,7 @@ dependencies = [
     "jinja2",
     "python-multipart",
     "pillow",
-    "ollama",
+
     "pydantic",
     "httpx",
     "python-dotenv",

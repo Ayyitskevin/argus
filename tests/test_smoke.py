@@ -1,6 +1,6 @@
 """Phase 0 smoke test — proves argus actually boots and serves on the mock backend.
 
-Runs fully offline: ARGUS_VISION_BACKEND=mock means no Ollama call, and the
+Runs fully offline: ARGUS_VISION_BACKEND=mock means no Grok API call, and the
 queue is disabled so /analyze-folder runs synchronously and deterministically.
 A temp JPEG is generated with Pillow because the repo ships no sample images.
 """
@@ -20,9 +20,16 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from app import config
 from app.main import app
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _mock_queue_off(monkeypatch):
+    monkeypatch.setattr(config, "QUEUE_ENABLED", False)
+    monkeypatch.setattr(config, "VISION_BACKEND", "mock")
 
 
 @pytest.fixture(scope="module")

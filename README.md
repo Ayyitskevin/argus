@@ -5,7 +5,7 @@ Named for Argus (the many-eyed giant).
 
 See [`docs/PHASE-0.md`](docs/PHASE-0.md) for the initial scope and what we're proving first.
 
-**Dev dogfood standard:** Grok generates test photos → Qwen (`qwen3-vl:32b`) analyzes via Argus.
+**Vision:** xAI Grok API only (`ARGUS_VISION_BACKEND=grok`). Mock for CI. No local qwen/Ollama.
 See [`docs/DOGFOOD-STANDARD.md`](docs/DOGFOOD-STANDARD.md). CI stays mock-only.
 
 This is the shared vision/metadata layer for the photography AI suite (feeds mnemosyne/albumwright, platekit, etc.).
@@ -19,7 +19,8 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # Optional: override model or data dir
-export ARGUS_VISION_MODEL=qwen3-vl:32b
+export XAI_API_KEY=xai-...
+export ARGUS_VISION_MODEL=grok-2-vision-1212
 export ARGUS_DATA_DIR=./data
 
 python -m app.main

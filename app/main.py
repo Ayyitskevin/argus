@@ -139,7 +139,8 @@ def healthz():
         "prometheus_enabled": config.PROMETHEUS_ENABLED,
         "queue_depth": db.queue_depth() if config.QUEUE_ENABLED else 0,
         "model": config.VISION_MODEL,
-        "ollama": config.OLLAMA_HOST,
+        "grok_configured": bool(config.XAI_API_KEY),
+        "vision_provider": "xai" if config.VISION_BACKEND == "grok" else config.VISION_BACKEND,
     }
 
 

@@ -1,7 +1,7 @@
 """Vision analysis core for photometa / argus.
 
-Uses local Ollama + qwen3-vl (or configured model). Produces structured
-photography-specific output via forced JSON.
+Uses xAI Grok API for image understanding (ARGUS_VISION_BACKEND=grok).
+Mock backend stays local for CI. Produces structured JSON via response_format.
 """
 
 import base64
@@ -11,11 +11,11 @@ import logging
 from pathlib import Path
 from typing import Any
 
-import ollama
 from PIL import Image, ImageOps
 from pydantic import BaseModel, Field
 
 from . import config
+from .grok_client import GrokVisionError, chat_vision, message_json_text
 
 
 class Culling(BaseModel):
@@ -110,23 +110,33 @@ def _prepare_image(path: str | Path) -> tuple[bytes, tuple[int, int]]:
         return buf.getvalue(), (w, h)
 
 
-def _ollama_json_content(resp: dict) -> str:
-    """Pull JSON text from an Ollama chat response.
+def _extract_json_blob(text: str) -> str:
+    """Return a JSON object substring from model output (content or thinking)."""
+    blob = (text or "").strip()
+    if not blob or blob == "{}":
+        return ""
+    if blob.startswith("{") and blob.endswith("}"):
+        return blob
+    start = blob.find("{")
+    end = blob.rfind("}")
+    if start >= 0 and end > start:
+        return blob[start : end + 1]
+    return blob
 
-    qwen3-vl is a thinking model: with format=json the answer may land in
-    `thinking` while `content` is empty or `{}`. mnemosyne hit the same pattern.
-    """
-    msg = resp.get("message") or {}
-    content = (msg.get("content") or "").strip()
-    if content and content != "{}":
-        return content
-    thinking = (msg.get("thinking") or "").strip()
-    if thinking:
-        return thinking
-    return content
+
+def _grok_json_content(api_response: dict) -> str:
+    """Pull JSON text from an xAI chat completion response."""
+    choices = api_response.get("choices") or []
+    if not choices:
+        return ""
+    message = choices[0].get("message") or {}
+    blob = _extract_json_blob(message_json_text(message))
+    return blob
 
 
 def _parse_vision_payload(content: str) -> dict:
+    if not (content or "").strip():
+        raise ValueError("empty vision JSON")
     parsed = json.loads(content)
     if not isinstance(parsed, dict):
         raise ValueError("vision JSON root must be an object")
@@ -217,48 +227,42 @@ def analyze_image(
 ) -> AnalysisResult:
     """Run vision analysis on a single local image path. Returns typed AnalysisResult.
 
-    Honors config.VISION_BACKEND: "mock" (the safe default) returns synthetic
-    output without calling Ollama, so the service boots and tests run on a
-    headless box; "real" calls the configured vision model. Optional learned
-    `prefs` nudge the result in either mode."""
+    Honors config.VISION_BACKEND: "mock" (CI default) or "grok"/"real" (xAI API).
+    Optional learned `prefs` nudge the result in either mode."""
     model = model or config.VISION_MODEL
     img_bytes, (width, height) = _prepare_image(image_path)
 
     if config.VISION_BACKEND == "mock":
         return _apply_prefs(_mock_result(image_path, width, height, model), prefs)
 
-    b64 = base64.b64encode(img_bytes).decode("utf-8")
+    if config.VISION_BACKEND != "grok":
+        raise ValueError(f"unsupported VISION_BACKEND: {config.VISION_BACKEND}")
 
+    b64 = base64.b64encode(img_bytes).decode("utf-8")
     user_prompt = USER_PROMPT_TEMPLATE.format(max_tags=config.DEFAULT_MAX_TAGS)
 
     try:
-        client = ollama.Client(host=config.OLLAMA_HOST)
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt, "images": [b64]},
-        ]
-        resp = client.chat(
-            model=model,
-            messages=messages,
-            format="json",
-            options={"temperature": 0.2, "top_p": 0.9},
-        )
-        content = _ollama_json_content(resp)
-        parsed = _parse_vision_payload(content)
-        if _is_degenerate_payload(parsed):
-            log.warning("degenerate vision JSON for %s — retrying once", image_path)
-            retry_prompt = user_prompt + "\n\nYour previous reply was empty. Return populated JSON only."
-            resp = client.chat(
+        def _chat_and_parse(extra_hint: str = "", *, temperature: float = 0.2) -> dict:
+            prompt = user_prompt + (f"\n\n{extra_hint}" if extra_hint else "")
+            api_resp = chat_vision(
+                system_prompt=SYSTEM_PROMPT,
+                user_prompt=prompt,
+                image_jpeg_b64=b64,
                 model=model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": retry_prompt, "images": [b64]},
-                ],
-                format="json",
-                options={"temperature": 0.1, "top_p": 0.9},
+                temperature=temperature,
             )
-            content = _ollama_json_content(resp)
-            parsed = _parse_vision_payload(content)
+            content = _grok_json_content(api_resp)
+            return _parse_vision_payload(content)
+
+        retry_hint = "Your previous reply was empty or invalid. Return one populated JSON object only."
+        try:
+            parsed = _chat_and_parse(temperature=0.2)
+            if _is_degenerate_payload(parsed):
+                log.warning("degenerate vision JSON for %s — retrying once", image_path)
+                parsed = _chat_and_parse(retry_hint, temperature=0.1)
+        except (json.JSONDecodeError, ValueError):
+            log.warning("unparseable vision JSON for %s — retrying once", image_path)
+            parsed = _chat_and_parse(retry_hint, temperature=0.1)
 
         # Light normalization / defaults
         keywords = parsed.get("keywords") or []
@@ -289,15 +293,23 @@ def analyze_image(
             alt_text=(parsed.get("alt_text") or "").strip(),
             description=(parsed.get("description") or "").strip(),
             suggested_iptc=parsed.get("suggested_iptc") or {},
-            raw_response=content,
-            model=model,
+            raw_response=json.dumps(parsed, ensure_ascii=False),
+            model=f"grok:{model}",
         )
 
         log.info("analyzed %s | model=%s | tags=%d | score=%.2f", image_path, model, len(keywords), result.culling.keeper_score)
         return _apply_prefs(result, prefs)
 
+    except GrokVisionError as e:
+        log.error("grok vision failed for %s: %s", image_path, e)
+        err = str(e)
     except Exception as e:
         log.exception("vision analysis failed for %s", image_path)
+        err = str(e)
+    else:
+        err = None
+
+    if err is not None:
         # Return graceful fallback
         return AnalysisResult(
             image_path=str(image_path),
@@ -305,12 +317,12 @@ def analyze_image(
             height=height,
             shot_type="other",
             keywords=["analysis-failed"],
-            culling=Culling(keeper_score=0.3, hero_potential=0.3, technical_quality="unknown", notes=f"Error: {e}"),
+            culling=Culling(keeper_score=0.3, hero_potential=0.3, technical_quality="unknown", notes=f"Error: {err}"),
             alt_text="Image analysis unavailable.",
             description="",
             suggested_iptc={},
-            raw_response=str(e),
-            model=model,
+            raw_response=err,
+            model=f"grok:{model}",
         )
 
 
