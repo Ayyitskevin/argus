@@ -69,12 +69,17 @@ def validate_saas_startup() -> None:
         )
 
 
-def tenant_scope(ctx: AuthContext | None) -> str | None:
-    """Return tenant_id filter for DB queries; None means admin/unscoped."""
+def tenant_scope(ctx: AuthContext | None):
+    """Return the tenant scope for DB queries.
+
+    Non-SaaS (homelab) → None (no tenants, unscoped). In SaaS the admin reads
+    across tenants via the explicit GLOBAL_SCOPE sentinel so that an accidental
+    None never silently widens a tenant's query to every tenant's rows.
+    """
     if not config.SAAS_MODE or ctx is None:
         return None
     if ctx.is_admin:
-        return None
+        return db.GLOBAL_SCOPE
     return ctx.tenant_id
 
 

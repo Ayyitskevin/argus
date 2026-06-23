@@ -16,13 +16,13 @@ def should_track_costs() -> bool:
 
 
 def _notify(job_id: str, *, status: str, result: dict | None = None, error: str | None = None) -> None:
-    job = db.get_job(job_id)
+    job = db.get_job(job_id, tenant_id=db.GLOBAL_SCOPE)
     if job:
         fire_job_callback(job, status=status, result=result, error=error)
 
 
 def _fail_job(job_id: str, error_msg: str) -> None:
-    job = db.get_job(job_id)
+    job = db.get_job(job_id, tenant_id=db.GLOBAL_SCOPE)
     retries = int((job or {}).get("retry_count") or 0)
     if retries < config.JOB_MAX_RETRIES:
         db.update_job(job_id, status="queued", retry_count=retries + 1, error=error_msg)
@@ -72,6 +72,8 @@ def process_job(job: dict) -> None:
             else None,
             "recursive": bool(job.get("recursive")),
         }
+        if result.get("failed_count"):
+            job_result["failed_count"] = result["failed_count"]
         if result.get("project_id"):
             job_result["project_id"] = result["project_id"]
         if job.get("client_id"):

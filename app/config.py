@@ -126,6 +126,19 @@ STRIPE_BILLING_PORTAL_RETURN_URL = os.environ.get(
 # If unset, caller must pass explicit folder path to the originals.
 MISE_MEDIA_ROOT = Path(os.environ.get("ARGUS_MISE_MEDIA_ROOT", "")) if os.environ.get("ARGUS_MISE_MEDIA_ROOT") else None
 
+# Phase 11 hardening — in SaaS mode, folder/path analysis is confined to these
+# roots so a tenant API key can't make the server read arbitrary local files.
+# Comma-separated. Homelab (non-SaaS) is unrestricted (the operator's own box).
+# When unset in SaaS mode, defaults to the mise media root (if set) plus the
+# data dir; an empty list in SaaS mode means no local-path analysis at all.
+ALLOWED_MEDIA_ROOTS = [
+    Path(p.strip()).expanduser()
+    for p in os.environ.get("ARGUS_ALLOWED_MEDIA_ROOTS", "").split(",")
+    if p.strip()
+]
+if not ALLOWED_MEDIA_ROOTS:
+    ALLOWED_MEDIA_ROOTS = [r for r in (MISE_MEDIA_ROOT, DATA_DIR) if r is not None]
+
 # Logging
 LOG_LEVEL = os.environ.get("ARGUS_LOG_LEVEL", "INFO").upper()
 logging.basicConfig(level=LOG_LEVEL, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")

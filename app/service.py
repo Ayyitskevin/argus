@@ -20,6 +20,27 @@ def _tenant_dict(tenant_id: str | None) -> dict | None:
     return db.get_tenant(tenant_id)
 
 
+def assert_path_within_media_roots(path: Path) -> None:
+    """Confine analyzable local paths in SaaS mode so a tenant key cannot make
+    the server read arbitrary files on the host. Homelab/non-SaaS is unrestricted
+    (the operator's own machine). Raises AnalyzeError(403) on an out-of-bounds or
+    traversal-escaped path; the resolved-path containment check stops '../'."""
+    if not config.SAAS_MODE:
+        return
+    roots = config.ALLOWED_MEDIA_ROOTS
+    if not roots:
+        raise AnalyzeError("local path analysis is not permitted", 403)
+    resolved = path.resolve()
+    for root in roots:
+        try:
+            root_resolved = root.resolve()
+        except OSError:
+            continue
+        if resolved == root_resolved or resolved.is_relative_to(root_resolved):
+            return
+    raise AnalyzeError("path is outside the allowed media roots", 403)
+
+
 def extract_client_id(source: str | None) -> str | None:
     """Parse ``client:<id>|...`` from a persisted run source label."""
     if not source or not source.startswith("client:"):
@@ -42,8 +63,8 @@ def load_preferences(client_id: str | None) -> dict | None:
     if not client_id:
         return None
 
-    prefs = dict(db.get_preferences(client_id) or {})
-    stats = db.get_client_history_stats(client_id)
+    prefs = dict(db.get_preferences(client_id, tenant_id=db.GLOBAL_SCOPE) or {})
+    stats = db.get_client_history_stats(client_id, tenant_id=db.GLOBAL_SCOPE)
 
     if not prefs.get("keyword_boosts") and stats.get("top_keywords"):
         prefs["keyword_boosts"] = stats["top_keywords"][:5]
@@ -167,6 +188,11 @@ def analyze_single_image(
         analysis = vision.analyze_image(str(image_path), model=model, prefs=prefs, tenant=tenant)
     except MeteringError as exc:
         raise AnalyzeError(exc.message, exc.status_code) from exc
+    if getattr(analysis, "analysis_failed", False):
+        # The vision model errored; do not persist a fake "success" run.
+        raise AnalyzeError(
+            f"vision analysis failed: {analysis.culling.notes or 'model error'}", 502
+        )
     data = result_to_dict(analysis)
     if client_id:
         data["client_id"] = client_id
@@ -196,7 +222,7 @@ def sidecar_refs(image_path: str, sidecar_dir: str | Path | None = None) -> dict
 
 def build_run_manifest(run_id: int, *, sidecar_dir: str | Path | None = None) -> dict | None:
     """DAM-friendly bundle: paths, scores, and expected sidecar refs."""
-    data = db.get_full_run(run_id)
+    data = db.get_full_run(run_id, tenant_id=db.GLOBAL_SCOPE)
     if not data:
         return None
 
@@ -253,6 +279,10 @@ def validate_job_create(
     path = Path(folder).expanduser().resolve()
     if not path.is_dir():
         return None, f"folder not found or not a dir: {folder}"
+    try:
+        assert_path_within_media_roots(path)
+    except AnalyzeError as exc:
+        return None, exc.message
     if callback_url and not is_allowed_callback_url(callback_url):
         return None, "callback_url must be local or tailnet (http/https)"
     return path, None
@@ -272,6 +302,7 @@ def analyze_folder_run(
     tenant: dict | None = None,
 ) -> dict:
     """Analyze and persist a folder synchronously."""
+    assert_path_within_media_roots(Path(folder))
     model = model or config.VISION_MODEL
     tenant = tenant or (_tenant_dict(get_tenant_id()))
     tenant_id = tenant["id"] if tenant else None
@@ -289,6 +320,15 @@ def analyze_folder_run(
         recursive=recursive,
         tenant=tenant,
     )
+    failed = [a for a in analyses if getattr(a, "analysis_failed", False)]
+    if analyses and len(failed) == len(analyses):
+        # Every image errored — the model/provider is down, not a per-photo
+        # quirk. Fail the run so the job retries/dead-letters instead of being
+        # recorded as a successful analysis of junk results.
+        first_note = failed[0].culling.notes if failed else "model error"
+        raise AnalyzeError(
+            f"all {len(analyses)} image(s) failed vision analysis: {first_note}", 502
+        )
     out = persist_analysis_run(
         source=source,
         model=model,
@@ -298,6 +338,8 @@ def analyze_folder_run(
         sidecar_dir=sidecar_dir,
         tenant_id=tenant_id,
     )
+    if failed:
+        out["failed_count"] = len(failed)
     if project_id:
         out["project_id"] = project_id
     if client_id:
@@ -361,7 +403,7 @@ def record_correction_prefs(
     promote_keywords: list[str] | None = None,
 ) -> dict:
     """Merge human corrections into explicit client prefs (beats history)."""
-    prefs = dict(db.get_preferences(client_id) or {})
+    prefs = dict(db.get_preferences(client_id, tenant_id=db.GLOBAL_SCOPE) or {})
     boosts = list(prefs.get("keyword_boosts") or [])
     for tag in promote_keywords or keywords or []:
         key = str(tag).strip()
@@ -371,7 +413,7 @@ def record_correction_prefs(
             boosts.remove(key)
         boosts.insert(0, key)
     prefs["keyword_boosts"] = boosts[:10]
-    db.set_preferences(client_id, prefs)
+    db.set_preferences(client_id, prefs, tenant_id=db.GLOBAL_SCOPE)
     return prefs
 
 
@@ -402,7 +444,7 @@ def apply_photo_correction(
     if photo is None:
         return None
 
-    run = db.get_run(run_id)
+    run = db.get_run(run_id, tenant_id=db.GLOBAL_SCOPE)
     client_id = extract_client_id(run["source"] if run else None)
     prefs_updated = False
     if client_id and (keywords is not None or promote_keywords):
@@ -422,8 +464,8 @@ def apply_photo_correction(
 
 def compare_runs(run_a_id: int, run_b_id: int) -> dict | None:
     """Diff two runs by path overlap and score drift (re-analyze comparison)."""
-    data_a = db.get_full_run(run_a_id)
-    data_b = db.get_full_run(run_b_id)
+    data_a = db.get_full_run(run_a_id, tenant_id=db.GLOBAL_SCOPE)
+    data_b = db.get_full_run(run_b_id, tenant_id=db.GLOBAL_SCOPE)
     if not data_a or not data_b:
         return None
 
@@ -520,6 +562,7 @@ def perform_folder_analyze(
         )
     if not path.is_dir():
         raise AnalyzeError(f"folder not found or not a dir: {attempted}", 400)
+    assert_path_within_media_roots(path)
 
     if callback_url and not is_allowed_callback_url(callback_url):
         raise AnalyzeError("callback_url must be local or tailnet (http/https)", 400)

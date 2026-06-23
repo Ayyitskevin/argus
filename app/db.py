@@ -16,6 +16,52 @@ from typing import Optional
 
 from . import config
 
+# Money is stored as integer micro-USD (1e-6 USD) so the accumulating usage
+# ledger never drifts the way repeated float addition does. Public params and
+# return keys stay in USD floats; conversion happens only at this db boundary.
+MICRO_PER_USD = 1_000_000
+
+
+def _usd_to_micros(usd: float | None) -> int | None:
+    if usd is None:
+        return None
+    return int(round(float(usd) * MICRO_PER_USD))
+
+
+def _micros_to_usd(micros: int | None) -> float | None:
+    if micros is None:
+        return None
+    return micros / MICRO_PER_USD
+
+
+class TenantScopeError(Exception):
+    """Raised when a tenant-scoped query runs without a scope in SaaS mode."""
+
+
+# Sentinel a caller passes to deliberately read across all tenants (admin /
+# background worker). Distinct from None so an *accidental* omission of the
+# tenant filter fails closed in SaaS mode instead of silently leaking rows.
+GLOBAL_SCOPE = object()
+
+
+def _resolve_tenant_scope(tenant_id):
+    """Normalize a tenant scope to a filter value (str) or None (unscoped).
+
+    Fail-closed: in SaaS mode an unspecified scope (None) is rejected; admin
+    code must opt into the global view with GLOBAL_SCOPE. Homelab (non-SaaS)
+    has no tenants, so None means "no filter" as before.
+    """
+    if tenant_id is GLOBAL_SCOPE:
+        return None
+    if tenant_id is None:
+        if config.SAAS_MODE:
+            raise TenantScopeError(
+                "tenant scope required in SaaS mode (use db.GLOBAL_SCOPE for admin/global reads)"
+            )
+        return None
+    return tenant_id
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS analysis_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -79,7 +125,7 @@ CREATE TABLE IF NOT EXISTS tenants (
     name TEXT NOT NULL,
     active INTEGER NOT NULL DEFAULT 1,
     vision_provider TEXT NOT NULL DEFAULT 'grok',
-    cost_cap_usd REAL,
+    cost_cap_micro_usd INTEGER,
     monthly_image_cap INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT
@@ -102,7 +148,7 @@ CREATE TABLE IF NOT EXISTS tenant_usage (
     tenant_id TEXT NOT NULL,
     period TEXT NOT NULL,
     images_analyzed INTEGER NOT NULL DEFAULT 0,
-    cost_usd REAL NOT NULL DEFAULT 0,
+    cost_micro_usd INTEGER NOT NULL DEFAULT 0,
     grok_api_calls INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     PRIMARY KEY (tenant_id, period),
@@ -166,6 +212,8 @@ def _apply_schema(con: sqlite3.Connection) -> None:
         ("tenants", "stripe_subscription_id", "TEXT"),
         ("tenants", "billing_status", "TEXT"),
         ("tenants", "plan_tier", "TEXT"),
+        ("tenants", "cost_cap_micro_usd", "INTEGER"),
+        ("tenant_usage", "cost_micro_usd", "INTEGER NOT NULL DEFAULT 0"),
     ]:
         try:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {typ}")
@@ -287,6 +335,7 @@ def save_photo_analysis(run_id: int, data: dict) -> int:
 
 
 def get_run(run_id: int, *, tenant_id: str | None = None) -> sqlite3.Row | None:
+    tenant_id = _resolve_tenant_scope(tenant_id)
     con = connect()
     try:
         if tenant_id:
@@ -300,6 +349,7 @@ def get_run(run_id: int, *, tenant_id: str | None = None) -> sqlite3.Row | None:
 
 
 def get_photo_image_path(photo_id: int, *, tenant_id: str | None = None) -> str | None:
+    tenant_id = _resolve_tenant_scope(tenant_id)
     con = connect()
     try:
         if tenant_id:
@@ -399,6 +449,7 @@ def list_recent_runs(
     include_archived: bool = False,
     tenant_id: str | None = None,
 ) -> list[sqlite3.Row]:
+    tenant_id = _resolve_tenant_scope(tenant_id)
     con = connect()
     try:
         clauses: list[str] = []
@@ -485,6 +536,7 @@ def create_job(
 
 
 def get_job(job_id: str, *, tenant_id: str | None = None) -> dict | None:
+    tenant_id = _resolve_tenant_scope(tenant_id)
     con = connect()
     try:
         if tenant_id:
@@ -536,7 +588,7 @@ def claim_next_job() -> dict | None:
         raise
     finally:
         close(con)
-    return get_job(job_id)
+    return get_job(job_id, tenant_id=GLOBAL_SCOPE)
 
 
 def list_jobs(
@@ -545,6 +597,7 @@ def list_jobs(
     *,
     tenant_id: str | None = None,
 ) -> list[sqlite3.Row]:
+    tenant_id = _resolve_tenant_scope(tenant_id)
     con = connect()
     try:
         clauses: list[str] = []
@@ -660,6 +713,7 @@ def get_preferences(
     *,
     tenant_id: str | None = None,
 ) -> dict:
+    tenant_id = _resolve_tenant_scope(tenant_id)
     con = connect()
     try:
         if client_id:
@@ -704,6 +758,7 @@ def set_preferences(
     *,
     tenant_id: str | None = None,
 ) -> int:
+    tenant_id = _resolve_tenant_scope(tenant_id)
     prefs_json = json.dumps(prefs or {})
     with tx() as con:
         if tenant_id:
@@ -731,6 +786,7 @@ def _client_source_pattern(client_id: str) -> str:
 
 def get_client_history_stats(client_id: str, *, tenant_id: str | None = None) -> dict:
     """Aggregate prior runs and photo analyses for history-based prefs (Phase 4)."""
+    tenant_id = _resolve_tenant_scope(tenant_id)
     pattern = _client_source_pattern(client_id)
     con = connect()
     try:
@@ -826,7 +882,7 @@ def _tenant_dict(row: sqlite3.Row | None) -> dict | None:
         "name": row["name"],
         "active": bool(row["active"]),
         "vision_provider": row["vision_provider"],
-        "cost_cap_usd": row["cost_cap_usd"],
+        "cost_cap_usd": _micros_to_usd(row["cost_cap_micro_usd"]),
         "monthly_image_cap": row["monthly_image_cap"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -849,9 +905,9 @@ def create_tenant(
 ) -> dict:
     with tx() as con:
         con.execute(
-            """INSERT INTO tenants (id, name, vision_provider, cost_cap_usd, monthly_image_cap, updated_at)
+            """INSERT INTO tenants (id, name, vision_provider, cost_cap_micro_usd, monthly_image_cap, updated_at)
                VALUES (?, ?, ?, ?, ?, datetime('now'))""",
-            (tenant_id, name, vision_provider, cost_cap_usd, monthly_image_cap),
+            (tenant_id, name, vision_provider, _usd_to_micros(cost_cap_usd), monthly_image_cap),
         )
     tenant = get_tenant(tenant_id)
     assert tenant is not None
@@ -896,6 +952,8 @@ def update_tenant(tenant_id: str, **fields) -> dict | None:
         return get_tenant(tenant_id)
     if "active" in updates:
         updates["active"] = 1 if updates["active"] else 0
+    if "cost_cap_usd" in updates:
+        updates["cost_cap_micro_usd"] = _usd_to_micros(updates.pop("cost_cap_usd"))
     assignments = ", ".join(f"{key}=?" for key in updates)
     values = list(updates.values()) + [tenant_id]
     with tx() as con:
@@ -928,7 +986,7 @@ def find_tenant_by_key_prefix(key_prefix: str) -> list[dict]:
         rows = con.execute(
             """SELECT k.id AS key_id, k.key_hash, k.revoked_at, k.label,
                       t.id AS tenant_id, t.name, t.active, t.vision_provider,
-                      t.cost_cap_usd, t.monthly_image_cap, t.created_at, t.updated_at
+                      t.cost_cap_micro_usd, t.monthly_image_cap, t.created_at, t.updated_at
                FROM tenant_api_keys k
                JOIN tenants t ON t.id = k.tenant_id
                WHERE k.key_prefix=? AND k.revoked_at IS NULL AND t.active=1""",
@@ -941,7 +999,7 @@ def find_tenant_by_key_prefix(key_prefix: str) -> list[dict]:
                 "name": row["name"],
                 "active": bool(row["active"]),
                 "vision_provider": row["vision_provider"],
-                "cost_cap_usd": row["cost_cap_usd"],
+                "cost_cap_usd": _micros_to_usd(row["cost_cap_micro_usd"]),
                 "monthly_image_cap": row["monthly_image_cap"],
                 "created_at": row["created_at"],
                 "updated_at": row["updated_at"],
@@ -999,7 +1057,7 @@ def get_tenant_usage(tenant_id: str, period: str | None = None) -> dict:
             "tenant_id": tenant_id,
             "period": period,
             "images_analyzed": int(row["images_analyzed"]),
-            "cost_usd": float(row["cost_usd"]),
+            "cost_usd": _micros_to_usd(int(row["cost_micro_usd"])),
             "grok_api_calls": int(row["grok_api_calls"]),
             "updated_at": row["updated_at"],
         }
@@ -1018,14 +1076,14 @@ def increment_tenant_usage(
     period = period or _usage_period()
     with tx() as con:
         con.execute(
-            """INSERT INTO tenant_usage (tenant_id, period, images_analyzed, cost_usd, grok_api_calls, updated_at)
+            """INSERT INTO tenant_usage (tenant_id, period, images_analyzed, cost_micro_usd, grok_api_calls, updated_at)
                VALUES (?, ?, ?, ?, ?, datetime('now'))
                ON CONFLICT(tenant_id, period) DO UPDATE SET
                  images_analyzed = images_analyzed + excluded.images_analyzed,
-                 cost_usd = cost_usd + excluded.cost_usd,
+                 cost_micro_usd = cost_micro_usd + excluded.cost_micro_usd,
                  grok_api_calls = grok_api_calls + excluded.grok_api_calls,
                  updated_at = datetime('now')""",
-            (tenant_id, period, images, cost_usd, grok_api_calls),
+            (tenant_id, period, images, _usd_to_micros(cost_usd) or 0, grok_api_calls),
         )
     return get_tenant_usage(tenant_id, period)
 
@@ -1045,6 +1103,7 @@ def charge_tenant_usage(
         return get_tenant_usage(tenant_id, period)
 
     period = period or _usage_period()
+    charge_micros = _usd_to_micros(cost_usd) or 0
     con = connect()
     try:
         con.execute("BEGIN IMMEDIATE")
@@ -1058,7 +1117,7 @@ def charge_tenant_usage(
             (tenant_id, period),
         ).fetchone()
         current_images = int(usage_row["images_analyzed"]) if usage_row else 0
-        current_cost = float(usage_row["cost_usd"]) if usage_row else 0.0
+        current_micros = int(usage_row["cost_micro_usd"]) if usage_row else 0
 
         if global_monthly_image_cap > 0:
             global_row = con.execute(
@@ -1071,20 +1130,21 @@ def charge_tenant_usage(
                 con.rollback()
                 raise _UsageCapExceeded("global monthly image cap reached")
 
-        if global_cost_cap_usd > 0:
+        global_cap_micros = _usd_to_micros(global_cost_cap_usd) or 0
+        if global_cap_micros > 0:
             global_row = con.execute(
-                """SELECT COALESCE(SUM(cost_usd), 0) AS cost
+                """SELECT COALESCE(SUM(cost_micro_usd), 0) AS cost
                    FROM tenant_usage WHERE period=?""",
                 (period,),
             ).fetchone()
-            global_cost = float(global_row["cost"]) if global_row else 0.0
-            if global_cost + cost_usd > global_cost_cap_usd:
+            global_micros = int(global_row["cost"]) if global_row else 0
+            if global_micros + charge_micros > global_cap_micros:
                 con.rollback()
                 raise _UsageCapExceeded("global cloud cost cap reached")
 
         tenant = _tenant_dict(tenant_row)
-        cap_usd = tenant.get("cost_cap_usd")
-        if cap_usd is not None and cap_usd > 0 and current_cost + cost_usd > float(cap_usd):
+        cap_micros = _usd_to_micros(tenant.get("cost_cap_usd"))
+        if cap_micros is not None and cap_micros > 0 and current_micros + charge_micros > cap_micros:
             con.rollback()
             raise _UsageCapExceeded(f"tenant {tenant_id} cost cap reached")
 
@@ -1094,14 +1154,14 @@ def charge_tenant_usage(
             raise _UsageCapExceeded(f"tenant {tenant_id} monthly image cap reached")
 
         con.execute(
-            """INSERT INTO tenant_usage (tenant_id, period, images_analyzed, cost_usd, grok_api_calls, updated_at)
+            """INSERT INTO tenant_usage (tenant_id, period, images_analyzed, cost_micro_usd, grok_api_calls, updated_at)
                VALUES (?, ?, ?, ?, ?, datetime('now'))
                ON CONFLICT(tenant_id, period) DO UPDATE SET
                  images_analyzed = images_analyzed + excluded.images_analyzed,
-                 cost_usd = cost_usd + excluded.cost_usd,
+                 cost_micro_usd = cost_micro_usd + excluded.cost_micro_usd,
                  grok_api_calls = grok_api_calls + excluded.grok_api_calls,
                  updated_at = datetime('now')""",
-            (tenant_id, period, images, cost_usd, grok_api_calls),
+            (tenant_id, period, images, charge_micros, grok_api_calls),
         )
         con.commit()
     except _UsageCapExceeded:
@@ -1126,7 +1186,7 @@ def global_usage_totals(period: str | None = None) -> dict:
     try:
         row = con.execute(
             """SELECT COALESCE(SUM(images_analyzed), 0) AS images,
-                      COALESCE(SUM(cost_usd), 0) AS cost,
+                      COALESCE(SUM(cost_micro_usd), 0) AS cost,
                       COALESCE(SUM(grok_api_calls), 0) AS grok_calls
                FROM tenant_usage WHERE period=?""",
             (period,),
@@ -1134,7 +1194,7 @@ def global_usage_totals(period: str | None = None) -> dict:
         return {
             "period": period,
             "images_analyzed": int(row["images"]),
-            "cost_usd": float(row["cost"]),
+            "cost_usd": _micros_to_usd(int(row["cost"])),
             "grok_api_calls": int(row["grok_calls"]),
         }
     finally:

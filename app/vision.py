@@ -38,6 +38,7 @@ class AnalysisResult(BaseModel):
     suggested_iptc: dict[str, Any] = Field(default_factory=dict)
     raw_response: str = ""
     model: str = ""
+    analysis_failed: bool = False
 
 
 log = logging.getLogger("argus.vision")
@@ -367,6 +368,7 @@ def analyze_image(
                 suggested_iptc={},
                 raw_response=err,
                 model=f"{provider}:{model}",
+                analysis_failed=True,
             )
 
     if config.VISION_BACKEND == "mock":
@@ -461,6 +463,7 @@ def analyze_image(
             suggested_iptc={},
             raw_response=err,
             model=f"grok:{model}",
+            analysis_failed=True,
         )
 
 

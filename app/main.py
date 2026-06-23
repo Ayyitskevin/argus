@@ -316,6 +316,10 @@ async def analyze_single(
             image_path = Path(path or "").expanduser().resolve()
             if not image_path.is_file():
                 return error(f"file not found: {path}", 404)
+            try:
+                service.assert_path_within_media_roots(image_path)
+            except service.AnalyzeError as exc:
+                return error(exc.message, exc.status_code)
 
         try:
             out = service.analyze_single_image(
