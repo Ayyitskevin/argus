@@ -49,6 +49,33 @@ def _check_billing() -> dict[str, str | bool]:
     }
 
 
+def _check_mise() -> dict[str, str | bool]:
+    from . import mise_client
+
+    if not mise_client.is_enabled():
+        return {"status": "disabled", "configured": False}
+    try:
+        mise_client.list_galleries(published=True)
+        return {"status": "ok", "configured": True, "reachable": True}
+    except Exception as exc:
+        return {"status": "degraded", "configured": True, "reachable": False, "detail": str(exc)[:120]}
+
+
+def _check_plutus() -> dict[str, str | bool]:
+    from . import plutus_client
+
+    st = plutus_client.connectivity()
+    if not st.get("configured"):
+        return {"status": "disabled", "configured": False}
+    reachable = bool(st.get("reachable"))
+    return {
+        "status": "ok" if reachable else "degraded",
+        "configured": True,
+        "reachable": reachable,
+        **{k: v for k, v in st.items() if k not in {"configured", "reachable"}},
+    }
+
+
 def _check_storage() -> dict[str, str | bool]:
     if config.STORAGE_BACKEND == "s3":
         ready = bool(config.S3_BUCKET and config.S3_ACCESS_KEY and config.S3_SECRET_KEY)
@@ -63,6 +90,9 @@ def build_health_report(*, worker: Any | None = None) -> dict:
         "vision": _check_vision(),
         "storage": _check_storage(),
     }
+    if not config.SAAS_MODE:
+        checks["mise"] = _check_mise()
+        checks["plutus"] = _check_plutus()
     if config.SAAS_MODE:
         checks["billing"] = _check_billing()
 

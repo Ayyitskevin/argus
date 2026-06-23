@@ -19,7 +19,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
-from . import config, db, metrics, mise_client, service
+from . import config, db, metrics, mise_client, pipeline, plutus_client, service
+from . import mise_dedup
 from .auth import UI_TOKEN_COOKIE, require_admin, require_bearer, resolve_auth, verify_api_access
 from .auth_context import AuthContext
 from . import metering, tenants
@@ -284,10 +285,16 @@ def home(request: Request):
         dict(row)
         for row in db.list_recent_runs(limit=6, tenant_id=tenant_scope(ctx))
     ]
+    pipeline_snap = None
+    if not config.SAAS_MODE and mise_client.is_enabled():
+        try:
+            pipeline_snap = pipeline.pipeline_snapshot()
+        except Exception:
+            log.exception("pipeline snapshot failed")
     return templates.TemplateResponse(
         request,
         "index.html",
-        _ui_context(recent_runs=recent),
+        _ui_context(recent_runs=recent, pipeline=pipeline_snap),
     )
 
 
@@ -689,6 +696,8 @@ def _run_review_context(data: dict, **filters) -> dict:
     run = data["run"]
     shot_types = sorted({photo.get("shot_type") or "other" for photo in photos})
     filtered = service.sort_and_filter_photos(photos, **filters)
+    mise_gallery_id = mise_dedup.parse_mise_gallery_id(run.get("source"))
+    handoff = pipeline.gallery_handoff(mise_gallery_id) if mise_gallery_id else None
     return _ui_context(
         run=run,
         photos=filtered,
@@ -701,6 +710,164 @@ def _run_review_context(data: dict, **filters) -> dict:
         filter_shot_type=filters.get("shot_type"),
         filter_keyword=filters.get("keyword"),
         filter_min_keeper=filters.get("min_keeper"),
+        mise_gallery_id=mise_gallery_id,
+        gallery_handoff=handoff,
+        plutus_url=pipeline._public_plutus_url(),
+        plutus_enabled=plutus_client.is_enabled(),
+    )
+
+
+@app.get("/ui/pipeline", response_class=HTMLResponse, tags=["ui"])
+def ui_pipeline(request: Request):
+    if config.SAAS_MODE:
+        return RedirectResponse("/", status_code=303)
+    try:
+        snap = pipeline.pipeline_snapshot()
+    except mise_client.MiseClientError as exc:
+        return templates.TemplateResponse(
+            request,
+            "pipeline.html",
+            _ui_context(
+                title="Pipeline",
+                checks={"mise": {"status": "error"}, "argus": {}, "plutus": {}},
+                galleries=[],
+                counts={"published": 0, "media_synced": 0, "argus_done": 0, "plutus_done": 0},
+                urls={
+                    "argus": pipeline._public_argus_url(),
+                    "plutus": pipeline._public_plutus_url(),
+                    "mise": config.MISE_URL,
+                },
+                handoff={
+                    "mise_configured": mise_client.is_enabled(),
+                    "plutus_auto": plutus_client.is_enabled(),
+                },
+                pipeline_error=str(exc),
+            ),
+        )
+    msg = request.query_params.get("msg")
+    err = request.query_params.get("error")
+    return templates.TemplateResponse(
+        request,
+        "pipeline.html",
+        _ui_context(
+            title="Pipeline",
+            checks=snap["checks"],
+            galleries=snap["galleries"],
+            counts=snap["counts"],
+            urls=snap["urls"],
+            handoff=snap["handoff"],
+            pipeline_message=msg,
+            pipeline_error=err,
+        ),
+    )
+
+
+@app.post("/ui/pipeline/analyze/{gallery_id}", tags=["ui"])
+def ui_pipeline_analyze(gallery_id: int, request: Request, api_token: Optional[str] = Form(None)):
+    if config.SAAS_MODE:
+        return RedirectResponse("/", status_code=303)
+    verify_api_access(request, form_token=api_token)
+    try:
+        result = service.perform_folder_analyze(
+            mise_gallery_id=gallery_id,
+            client_id="mise",
+            limit=int(os.environ.get("MISE_ARGUS_ANALYZE_LIMIT", "5")),
+            skip_dedup=True,
+        )
+    except service.AnalyzeError as exc:
+        return RedirectResponse(
+            f"/ui/pipeline?error={quote_plus(exc.message)}",
+            status_code=303,
+        )
+    if result.get("mode") == "queued":
+        queued_msg = f"Queued job {result.get('job_id')}"
+        return RedirectResponse(
+            f"/ui/pipeline?msg={quote_plus(queued_msg)}",
+            status_code=303,
+        )
+    return RedirectResponse(
+        f"/runs/{result['run_id']}?msg={quote_plus('Analyze complete')}",
+        status_code=303,
+    )
+
+
+@app.post("/ui/pipeline/plutus/{gallery_id}", tags=["ui"])
+def ui_pipeline_plutus(gallery_id: int, request: Request, api_token: Optional[str] = Form(None)):
+    if config.SAAS_MODE:
+        return RedirectResponse("/", status_code=303)
+    verify_api_access(request, form_token=api_token)
+    handoff = pipeline.gallery_handoff(gallery_id)
+    argus_run_id = (handoff or {}).get("argus_run_id")
+    if not argus_run_id:
+        return RedirectResponse(
+            "/ui/pipeline?error=Argus+run+required+before+Plutus+upsell",
+            status_code=303,
+        )
+    try:
+        result = plutus_client.recommend_mise_gallery(gallery_id, argus_run_id=int(argus_run_id))
+    except plutus_client.PlutusClientError as exc:
+        mise_client.plutus_callback(gallery_id, status="error", error=str(exc))
+        return RedirectResponse(
+            f"/ui/pipeline?error={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    run_id = int(result.get("run_id") or 0)
+    if run_id:
+        mise_client.plutus_callback(gallery_id, run_id=run_id, status="done")
+    plutus_msg = (
+        f"Plutus run {result.get('run_id')} — {len(result.get('bundles') or [])} bundles"
+    )
+    return RedirectResponse(
+        f"/ui/pipeline?msg={quote_plus(plutus_msg)}",
+        status_code=303,
+    )
+
+
+@app.post("/ui/pipeline/run-all/{gallery_id}", tags=["ui"])
+def ui_pipeline_run_all(gallery_id: int, request: Request, api_token: Optional[str] = Form(None)):
+    if config.SAAS_MODE:
+        return RedirectResponse("/", status_code=303)
+    verify_api_access(request, form_token=api_token)
+    try:
+        result = pipeline.run_all(gallery_id)
+    except pipeline.PipelineError as exc:
+        return RedirectResponse(
+            f"/ui/pipeline?error={quote_plus(exc.message)}",
+            status_code=303,
+        )
+    msg = " · ".join(result.get("steps") or [])
+    offer_url = result.get("offer_url") or ""
+    return RedirectResponse(
+        f"/ui/pipeline?msg={quote_plus(msg)}&offer_url={quote_plus(offer_url)}",
+        status_code=303,
+    )
+
+
+@app.post("/ui/pipeline/offer/{gallery_id}", tags=["ui"])
+def ui_pipeline_offer(gallery_id: int, request: Request, api_token: Optional[str] = Form(None)):
+    if config.SAAS_MODE:
+        return RedirectResponse("/", status_code=303)
+    verify_api_access(request, form_token=api_token)
+    handoff = pipeline.gallery_handoff(gallery_id) or {}
+    plutus_run_id = handoff.get("plutus_run_id")
+    if not plutus_run_id:
+        return RedirectResponse(
+            "/ui/pipeline?error=Plutus+upsell+required+before+client+offer",
+            status_code=303,
+        )
+    label = handoff.get("title") or f"Gallery {gallery_id}"
+    try:
+        link = plutus_client.create_share_link(int(plutus_run_id), label=label)
+    except plutus_client.PlutusClientError as exc:
+        return RedirectResponse(
+            f"/ui/pipeline?error={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    offer_url = link.get("public_url") or ""
+    msg = f"Client offer ready — {offer_url}"
+    return RedirectResponse(
+        f"/ui/pipeline?msg={quote_plus(msg)}&offer_url={quote_plus(offer_url)}",
+        status_code=303,
     )
 
 

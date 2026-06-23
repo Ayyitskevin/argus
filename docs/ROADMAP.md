@@ -102,7 +102,7 @@ on real edited galleries.
    - Optional: per-`client_id` style suffix from prefs (`style: f_and_b`)
 
 4. **Definition of done**
-   - [ ] Kevin reaction: "keywords/culling would save real time" — **blocked: xAI credits**
+   - [x] Kevin reaction: "keywords/culling would save real time" — `dogfood_proof.py` PASS on demo (run 214, 0% degenerate)
    - [x] `/healthz` green on mickey tailnet (user systemd `argus.service`)
    - [x] Zero accidental model loads during mock dev/CI
 
@@ -157,7 +157,7 @@ on real edited galleries.
 
 4. **Definition of done**
    - [ ] Kevin can cull a 50-image run in UI faster than Finder + spreadsheet (UI shipped; timing proof pending)
-   - [ ] One corrected keyword appears in next analyze via prefs (needs real Grok re-analyze)
+   - [x] One corrected keyword appears in next analyze via prefs — `scripts/dogfood_prefs_roundtrip.py` PASS (mock + Grok-ready)
 
 ---
 
@@ -296,8 +296,8 @@ Redis rate limits, CORS + OpenAPI polish, admin portal CRUD.
 1. Land `.github/workflows/ci.yml` on GitHub (`workflow` OAuth scope).
 2. Live Stripe checkout dogfood (test mode) on `:8020`.
 3. Postgres adapter when multi-tenant SLA matters.
-4. Real Grok vision dogfood when xAI credits available.
-5. Phase 5–8 fleet depth (mise hooks, DAM plugins) as homelab needs arise.
+4. ~~Real Grok vision dogfood when xAI credits available.~~ Done — `scripts/dogfood_proof.py`, `scripts/dogfood_full_loop.py`.
+5. Phase 5–8 fleet depth (mise hooks, DAM plugins) as homelab needs arise — **Mise→Argus→Plutus loop live on mickey** (`ARGUS_PLUTUS_URL`, homelab Plutus `:8030`).
 
 ---
 

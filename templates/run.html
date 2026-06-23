@@ -1,14 +1,39 @@
 {% extends "base.html" %}
 
 {% block content %}
+<style>.inline-form{display:inline;margin-right:.35rem}</style>
 <div class="card">
   <h2>Run #{{ run.id }} <span class="badge">cull</span></h2>
   <div class="small">
     {{ run.source }} · {{ run.model }} · {{ all_photos|length }} photos
     {% if client_id %} · client <strong>{{ client_id }}</strong>{% endif %}
   </div>
-  <div class="nav"><a href="/">← new analysis</a> · <a href="/ui/compare?a={{ run.id }}">Compare</a> · <a href="/runs/{{ run.id }}/export.csv">CSV</a> · <a href="/runs/{{ run.id }}/export">JSON</a></div>
+  <div class="nav"><a href="/">← new analysis</a> · <a href="/ui/pipeline">Pipeline</a> · <a href="/ui/compare?a={{ run.id }}">Compare</a> · <a href="/runs/{{ run.id }}/export.csv">CSV</a> · <a href="/runs/{{ run.id }}/export">JSON</a></div>
 </div>
+
+{% if mise_gallery_id %}
+<div class="card card-muted">
+  <h3 style="margin-top:0">Mise gallery #{{ mise_gallery_id }}</h3>
+  <p class="small" style="margin:0 0 .5rem">
+    {% if gallery_handoff and gallery_handoff.title %}<strong>{{ gallery_handoff.title }}</strong> · {% endif %}
+    Vision complete on this run.
+    {% if plutus_enabled %}
+    Generate or open Plutus print bundles for the client pitch.
+    {% endif %}
+  </p>
+  <div class="toolbar" style="margin:0">
+    {% if gallery_handoff and gallery_handoff.plutus_run_id %}
+    <a class="btn secondary" href="{{ plutus_url }}/runs/{{ gallery_handoff.plutus_run_id }}" target="_blank" rel="noopener">View bundles</a>
+    <a class="btn secondary" href="{{ plutus_url }}/runs/{{ gallery_handoff.plutus_run_id }}/pitch.txt" target="_blank" rel="noopener">Client pitch</a>
+    {% elif plutus_enabled %}
+    <form method="post" action="/ui/pipeline/plutus/{{ mise_gallery_id }}" class="inline-form">
+      <button type="submit">Generate print bundles</button>
+    </form>
+    {% endif %}
+    <a class="btn secondary" href="/ui/pipeline">Pipeline dashboard</a>
+  </div>
+</div>
+{% endif %}
 
 {% if heroes %}
 <div class="card">

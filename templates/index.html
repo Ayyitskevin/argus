@@ -19,6 +19,20 @@
 </div>
 {% endif %}
 
+{% if pipeline %}
+<div class="card card-muted">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
+    <div>
+      <h3 style="margin:0">Homelab pipeline</h3>
+      <p class="small" style="margin:.25rem 0 0">
+        {{ pipeline.counts.published }} galleries · {{ pipeline.counts.argus_done }} vision · {{ pipeline.counts.plutus_done }} upsell
+      </p>
+    </div>
+    <a class="btn secondary" href="/ui/pipeline" style="font-size:.82rem">Open dashboard →</a>
+  </div>
+</div>
+{% endif %}
+
 {% if vision %}
 <div class="card {% if vision.ready %}vision-ready{% else %}vision-down{% endif %}">
   <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; flex-wrap:wrap;">
@@ -42,6 +56,7 @@
     {% endif %}
     <a class="btn secondary" href="/vision/status" style="font-size:.78rem; padding:.3rem .6rem">JSON status</a>
     <a class="btn secondary" href="/ui/jobs" style="font-size:.78rem; padding:.3rem .6rem">Jobs</a>
+    {% if pipeline %}<a class="btn secondary" href="/ui/pipeline" style="font-size:.78rem; padding:.3rem .6rem">Pipeline</a>{% endif %}
     {% if recent_runs %}
     <a class="btn" href="/runs/{{ recent_runs[0].id }}" style="font-size:.78rem; padding:.3rem .6rem">Latest run →</a>
     {% endif %}

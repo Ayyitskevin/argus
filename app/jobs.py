@@ -110,6 +110,9 @@ def process_job(job: dict) -> None:
         gid = mise_dedup.parse_mise_gallery_id(job.get("source"))
         if gid is not None:
             mise_dedup.record_done(gid, job.get("client_id"), int(result["run_id"]))
+            from . import plutus_client
+
+            plutus_client.handoff_async(gid, int(result["run_id"]))
         metrics.inc("jobs_completed")
         metrics.inc("photos_analyzed", result["count"])
         log.info("Job %s completed -> run %s", job_id, result["run_id"])

@@ -65,3 +65,39 @@ def get_gallery(gallery_id: int) -> dict[str, Any] | None:
         if row.get("id") == gallery_id:
             return row
     return None
+
+
+def plutus_callback(
+    gallery_id: int,
+    *,
+    run_id: int | None = None,
+    status: str = "done",
+    error: str | None = None,
+) -> None:
+    """Best-effort write-back so pipeline dashboard shows plutus_last_*."""
+    if not is_enabled():
+        return
+    url = f"{config.MISE_URL}/api/plutus/callback"
+    payload: dict[str, Any] = {"status": status}
+    if run_id is not None:
+        payload["run_id"] = run_id
+    if error:
+        payload["error"] = error
+    try:
+        with httpx.Client(timeout=config.MISE_TIMEOUT) as client:
+            resp = client.post(
+                url,
+                params={"gallery_id": gallery_id},
+                json=payload,
+                headers=_headers(),
+            )
+    except httpx.RequestError as exc:
+        log.warning("mise plutus callback unreachable gallery %s: %s", gallery_id, exc)
+        return
+    if resp.status_code >= 400:
+        log.warning(
+            "mise plutus callback HTTP %s gallery %s: %s",
+            resp.status_code,
+            gallery_id,
+            resp.text[:200],
+        )
