@@ -43,9 +43,10 @@ def resolve_auth(
             set_auth_context(ctx)
             request.state.auth = ctx
             return ctx
-        tenant = tenants.resolve_api_key(provided)
-        if tenant:
-            ctx = AuthContext(tenant=tenant)
+        resolved = tenants.resolve_api_key(provided)
+        if resolved:
+            tenant, key_id = resolved
+            ctx = AuthContext(tenant=tenant, api_key_id=key_id)
             set_auth_context(ctx)
             request.state.auth = ctx
             return ctx

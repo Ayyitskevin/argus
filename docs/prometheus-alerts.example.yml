@@ -1,0 +1,32 @@
+# Example Prometheus alert rules for Argus (Phase 11+).
+# Scrape GET /healthz and /metrics/prometheus when ARGUS_PROMETHEUS_ENABLED=true.
+
+groups:
+  - name: argus
+    rules:
+      - alert: ArgusHealthDegraded
+        expr: argus_health_status != 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Argus health is degraded or error"
+          description: "Check /healthz checks.database and checks.vision on the instance."
+
+      - alert: ArgusQueueDepthHigh
+        expr: argus_queue_depth > 50
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Argus job queue depth high"
+          description: "More than 50 queued jobs for 10 minutes."
+
+      - alert: ArgusRateLimitBurst
+        expr: increase(argus_http_responses_total{status="429"}[5m]) > 20
+        for: 2m
+        labels:
+          severity: info
+        annotations:
+          summary: "Argus rate limits firing frequently"
+          description: "Tenants or IPs hitting 429 — review ARGUS_RATE_LIMIT_* settings."

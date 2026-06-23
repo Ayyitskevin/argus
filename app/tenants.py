@@ -90,8 +90,8 @@ def issue_api_key(tenant_id: str, *, label: str | None = None) -> dict:
     }
 
 
-def resolve_api_key(raw_key: str | None) -> dict | None:
-    """Return tenant dict when raw_key matches an active tenant key."""
+def resolve_api_key(raw_key: str | None) -> tuple[dict, str] | None:
+    """Return (tenant dict, key_id) when raw_key matches an active tenant key."""
     if not raw_key or not raw_key.strip():
         return None
     raw_key = raw_key.strip()
@@ -105,7 +105,7 @@ def resolve_api_key(raw_key: str | None) -> dict | None:
     digest = _hash_key(raw_key)
     for candidate in db.find_tenant_by_key_prefix(prefix):
         if secrets.compare_digest(candidate["key_hash"], digest):
-            return candidate["tenant"]
+            return candidate["tenant"], candidate["key_id"]
     return None
 
 

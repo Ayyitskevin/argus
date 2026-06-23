@@ -91,6 +91,12 @@ CORS_ORIGINS = [
 
 CAP_WARNING_THRESHOLD = float(os.environ.get("ARGUS_CAP_WARNING_THRESHOLD", "0.8"))
 CAP_WEBHOOK_URL = os.environ.get("ARGUS_CAP_WEBHOOK_URL") or None
+CAP_ALERT_EMAIL = os.environ.get("ARGUS_CAP_ALERT_EMAIL") or None
+SMTP_HOST = os.environ.get("ARGUS_SMTP_HOST") or None
+SMTP_PORT = int(os.environ.get("ARGUS_SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("ARGUS_SMTP_USER") or None
+SMTP_PASSWORD = os.environ.get("ARGUS_SMTP_PASSWORD") or None
+SMTP_FROM = os.environ.get("ARGUS_SMTP_FROM") or SMTP_USER
 STRUCTURED_LOGS = os.environ.get("ARGUS_STRUCTURED_LOGS", "true").lower() == "true"
 
 AUDIT_LOG_ENABLED = os.environ.get("ARGUS_AUDIT_LOG_ENABLED", "true").lower() == "true"

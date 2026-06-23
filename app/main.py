@@ -1110,6 +1110,79 @@ def tenant_usage(ctx: AuthContext = Depends(require_bearer)):
     return metering.usage_snapshot(ctx.tenant_id)
 
 
+@app.get(
+    "/tenant/keys",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_bearer)],
+    tags=["tenant"],
+    summary="List API keys for the authenticated tenant (metadata only)",
+)
+def tenant_list_keys(ctx: AuthContext = Depends(require_bearer)):
+    if not ctx.tenant:
+        return error("tenant API key required", 403)
+    keys = []
+    for row in db.list_tenant_keys(ctx.tenant_id):
+        item = dict(row)
+        item["is_current"] = item["id"] == ctx.api_key_id
+        keys.append(item)
+    return {"keys": keys}
+
+
+@app.post(
+    "/tenant/keys",
+    response_class=JSONResponse,
+    tags=["tenant"],
+    summary="Issue a new API key for the authenticated tenant",
+)
+def tenant_issue_key(
+    request: Request,
+    body: TenantKeyCreate,
+    ctx: AuthContext = Depends(require_bearer),
+):
+    if not ctx.tenant:
+        return error("tenant API key required", 403)
+    try:
+        issued = tenants.issue_api_key(ctx.tenant_id, label=body.label)
+    except TenantError as exc:
+        return error(str(exc), 400)
+    audit.record(
+        "tenant.key.issue",
+        request=request,
+        ctx=ctx,
+        tenant_id=ctx.tenant_id,
+        resource=issued["key_id"],
+    )
+    return issued
+
+
+@app.delete(
+    "/tenant/keys/{key_id}",
+    response_class=JSONResponse,
+    tags=["tenant"],
+    summary="Revoke an API key owned by the authenticated tenant",
+)
+def tenant_revoke_key(key_id: str, request: Request, ctx: AuthContext = Depends(require_bearer)):
+    if not ctx.tenant:
+        return error("tenant API key required", 403)
+    keys = {row["id"] for row in db.list_tenant_keys(ctx.tenant_id) if not row.get("revoked_at")}
+    if key_id not in keys:
+        return error("key not found", 404)
+    if key_id == ctx.api_key_id:
+        return error("cannot revoke the API key used for this request", 400)
+    if len(keys) <= 1:
+        return error("cannot revoke your only active API key", 400)
+    if not tenants.revoke_key(key_id):
+        return error("key already revoked", 409)
+    audit.record(
+        "tenant.key.revoke",
+        request=request,
+        ctx=ctx,
+        tenant_id=ctx.tenant_id,
+        resource=key_id,
+    )
+    return {"ok": True, "key_id": key_id, "revoked": True}
+
+
 @app.get("/admin/tenants", response_class=JSONResponse, dependencies=[Depends(require_admin)])
 def admin_list_tenants(active_only: bool = Query(False)):
     if not config.SAAS_MODE:
@@ -1194,10 +1267,14 @@ def admin_tenant_usage(tenant_id: str):
 
 
 @app.get("/admin/audit", response_class=JSONResponse, dependencies=[Depends(require_admin)])
-def admin_audit_log(tenant_id: Optional[str] = Query(None), limit: int = Query(50, ge=1, le=500)):
+def admin_audit_log(
+    tenant_id: Optional[str] = Query(None),
+    action: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+):
     if not config.SAAS_MODE:
         return error("ARGUS_SAAS_MODE is disabled", 404)
-    return {"events": db.list_audit_events(tenant_id=tenant_id, limit=limit)}
+    return {"events": db.list_audit_events(tenant_id=tenant_id, action=action, limit=limit)}
 
 
 @app.post("/admin/tenants/{tenant_id}/billing/checkout", response_class=JSONResponse, dependencies=[Depends(require_admin)])
@@ -1291,11 +1368,18 @@ def ui_saas_login_post(request: Request, api_token: str = Form(...)):
     return response
 
 
-@app.get("/ui/saas/app", response_class=HTMLResponse)
-def ui_saas_tenant_app(request: Request):
+def _tenant_ui_redirect(request: Request) -> AuthContext | RedirectResponse:
     ctx = _ui_saas_auth(request)
     if ctx is None or ctx.is_admin or not ctx.tenant:
         return RedirectResponse("/ui/saas/login", status_code=303)
+    return ctx
+
+
+@app.get("/ui/saas/app", response_class=HTMLResponse)
+def ui_saas_tenant_app(request: Request):
+    ctx = _tenant_ui_redirect(request)
+    if not isinstance(ctx, AuthContext):
+        return ctx
     usage = metering.usage_snapshot(ctx.tenant_id)
     recent = [
         dict(row)
@@ -1303,6 +1387,11 @@ def ui_saas_tenant_app(request: Request):
     ]
     tenant_jobs = [dict(row) for row in db.list_jobs(limit=10, tenant_id=ctx.tenant_id)]
     audit_events = db.list_audit_events(tenant_id=ctx.tenant_id, limit=15)
+    tenant_keys = []
+    for row in db.list_tenant_keys(ctx.tenant_id):
+        item = dict(row)
+        item["is_current"] = item["id"] == ctx.api_key_id
+        tenant_keys.append(item)
     return templates.TemplateResponse(
         request,
         "saas_dashboard.html",
@@ -1314,8 +1403,12 @@ def ui_saas_tenant_app(request: Request):
             cap_warnings=usage.get("warnings") or [],
             recent_runs=recent,
             tenant_jobs=tenant_jobs,
+            tenant_keys=tenant_keys,
+            current_key_id=ctx.api_key_id,
             audit_events=audit_events,
             billing_enabled=billing.billing_enabled(),
+            tenant_message="API key revoked." if request.query_params.get("keys_updated") else None,
+            tenant_error=request.query_params.get("keys_error"),
         ),
     )
 
@@ -1350,18 +1443,105 @@ def _admin_tenant_context(
     )
 
 
+@app.post("/ui/saas/app/keys")
+def ui_saas_tenant_issue_key(
+    request: Request,
+    label: Optional[str] = Form(None),
+):
+    ctx = _tenant_ui_redirect(request)
+    if not isinstance(ctx, AuthContext):
+        return ctx
+    try:
+        issued = tenants.issue_api_key(ctx.tenant_id, label=label.strip() if label else None)
+    except TenantError as exc:
+        return RedirectResponse(
+            f"/ui/saas/app?keys_error={quote_plus(str(exc))}",
+            status_code=303,
+        )
+    audit.record(
+        "tenant.key.issue",
+        request=request,
+        ctx=ctx,
+        tenant_id=ctx.tenant_id,
+        resource=issued["key_id"],
+    )
+    usage = metering.usage_snapshot(ctx.tenant_id)
+    recent = [dict(row) for row in db.list_recent_runs(limit=8, tenant_id=ctx.tenant_id)]
+    tenant_jobs = [dict(row) for row in db.list_jobs(limit=10, tenant_id=ctx.tenant_id)]
+    tenant_keys = []
+    for row in db.list_tenant_keys(ctx.tenant_id):
+        item = dict(row)
+        item["is_current"] = item["id"] == ctx.api_key_id
+        tenant_keys.append(item)
+    return templates.TemplateResponse(
+        request,
+        "saas_dashboard.html",
+        _ui_context(
+            title="Tenant dashboard",
+            portal_mode="tenant",
+            tenant=ctx.tenant,
+            usage=usage,
+            cap_warnings=usage.get("warnings") or [],
+            recent_runs=recent,
+            tenant_jobs=tenant_jobs,
+            tenant_keys=tenant_keys,
+            current_key_id=ctx.api_key_id,
+            audit_events=db.list_audit_events(tenant_id=ctx.tenant_id, limit=15),
+            billing_enabled=billing.billing_enabled(),
+            issued_api_key=issued["api_key"],
+        ),
+    )
+
+
+@app.post("/ui/saas/app/keys/{key_id}/revoke")
+def ui_saas_tenant_revoke_key(request: Request, key_id: str):
+    ctx = _tenant_ui_redirect(request)
+    if not isinstance(ctx, AuthContext):
+        return ctx
+    active = {
+        row["id"]
+        for row in db.list_tenant_keys(ctx.tenant_id)
+        if not row.get("revoked_at")
+    }
+    if key_id not in active:
+        return RedirectResponse("/ui/saas/app?keys_error=key+not+found", status_code=303)
+    if key_id == ctx.api_key_id:
+        return RedirectResponse(
+            "/ui/saas/app?keys_error=cannot+revoke+the+key+used+for+this+session",
+            status_code=303,
+        )
+    if len(active) <= 1:
+        return RedirectResponse("/ui/saas/app?keys_error=cannot+revoke+your+only+active+key", status_code=303)
+    if not tenants.revoke_key(key_id):
+        return RedirectResponse("/ui/saas/app?keys_error=key+already+revoked", status_code=303)
+    audit.record(
+        "tenant.key.revoke",
+        request=request,
+        ctx=ctx,
+        tenant_id=ctx.tenant_id,
+        resource=key_id,
+    )
+    return RedirectResponse("/ui/saas/app?keys_updated=1", status_code=303)
+
+
 @app.get("/ui/saas/app/admin", response_class=HTMLResponse)
 def ui_saas_admin_app(
     request: Request,
     created: Optional[str] = Query(None),
     error: Optional[str] = Query(None),
+    audit_tenant: Optional[str] = Query(None),
+    audit_action: Optional[str] = Query(None),
 ):
     ctx = _admin_ui_redirect(request)
     if not isinstance(ctx, AuthContext):
         return ctx
     tenant_rows = db.list_tenants()
     global_usage = db.global_usage_totals()
-    audit_events = db.list_audit_events(limit=25)
+    audit_events = db.list_audit_events(
+        tenant_id=audit_tenant or None,
+        action=audit_action or None,
+        limit=50,
+    )
     admin_message = f"Tenant {created} created." if created else None
     admin_error = error
     return templates.TemplateResponse(
@@ -1373,6 +1553,8 @@ def ui_saas_admin_app(
             tenants=tenant_rows,
             global_usage=global_usage,
             audit_events=audit_events,
+            audit_tenant=audit_tenant,
+            audit_action=audit_action,
             billing_enabled=billing.billing_enabled(),
             admin_message=admin_message,
             admin_error=admin_error,

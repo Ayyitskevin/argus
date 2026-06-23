@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import logging
+import smtplib
+from email.message import EmailMessage
 from typing import Any
 
 import httpx
@@ -15,6 +17,10 @@ def _pct(used: float, cap: float) -> float | None:
     if cap <= 0:
         return None
     return used / cap
+
+
+def _smtp_ready() -> bool:
+    return bool(config.SMTP_HOST and config.SMTP_FROM)
 
 
 def tenant_cap_warnings(tenant_id: str) -> list[dict[str, Any]]:
@@ -75,8 +81,34 @@ def _post_webhook(payload: dict[str, Any]) -> None:
         log.warning("cap webhook failed: %s", exc)
 
 
+def _send_email(tenant_id: str, warning: dict[str, Any]) -> None:
+    recipient = config.CAP_ALERT_EMAIL
+    if not recipient or not _smtp_ready():
+        return
+    tenant = db.get_tenant(tenant_id) or {}
+    subject = f"[Argus] Cap warning for {tenant.get('name') or tenant_id}"
+    body = (
+        f"Tenant: {tenant_id} ({tenant.get('name') or 'unknown'})\n"
+        f"Warning: {warning['message']}\n"
+        f"Threshold: {config.CAP_WARNING_THRESHOLD * 100:.0f}%\n"
+    )
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = config.SMTP_FROM
+    msg["To"] = recipient
+    msg.set_content(body)
+    try:
+        with smtplib.SMTP(config.SMTP_HOST, config.SMTP_PORT, timeout=15) as smtp:
+            if config.SMTP_USER and config.SMTP_PASSWORD:
+                smtp.starttls()
+                smtp.login(config.SMTP_USER, config.SMTP_PASSWORD)
+            smtp.send_message(msg)
+    except Exception as exc:
+        log.warning("cap alert email failed: %s", exc)
+
+
 def maybe_notify(tenant_id: str) -> list[dict[str, Any]]:
-    """Log/webhook once per period per warning kind when threshold crossed."""
+    """Log/webhook/email once per period per warning kind when threshold crossed."""
     sent: list[dict[str, Any]] = []
     period = db._usage_period()
     for warning in tenant_cap_warnings(tenant_id):
@@ -98,6 +130,7 @@ def maybe_notify(tenant_id: str) -> list[dict[str, Any]]:
                 "warning": warning,
             }
         )
+        _send_email(tenant_id, warning)
         db.record_cap_alert(tenant_id, period, kind)
         sent.append(warning)
     return sent

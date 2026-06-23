@@ -7,7 +7,7 @@ from collections import defaultdict, deque
 from threading import Lock
 
 from fastapi import HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from . import config
 from .auth import resolve_auth
@@ -21,6 +21,7 @@ _redis_client = None
 _redis_unavailable = False
 
 ANALYZE_PATHS = frozenset({"/analyze", "/analyze-folder"})
+WINDOW_SECONDS = 60
 
 
 def _client_key(request: Request, ctx: AuthContext | None) -> str:
@@ -63,21 +64,22 @@ def _get_redis():
         return None
 
 
-def _check_memory(key: str, limit: int) -> tuple[bool, int]:
+def _check_memory(key: str, limit: int) -> tuple[bool, int, int]:
     now = time.time()
-    window = 60.0
     with _lock:
         bucket = _windows[key]
-        while bucket and now - bucket[0] > window:
+        while bucket and now - bucket[0] > WINDOW_SECONDS:
             bucket.popleft()
-        if len(bucket) >= limit:
-            retry_after = int(window - (now - bucket[0])) + 1
-            return False, max(retry_after, 1)
+        count = len(bucket)
+        if count >= limit:
+            retry_after = int(WINDOW_SECONDS - (now - bucket[0])) + 1
+            return False, max(retry_after, 1), 0
         bucket.append(now)
-        return True, 0
+        remaining = max(limit - len(bucket), 0)
+        return True, 0, remaining
 
 
-def _check_redis(key: str, limit: int) -> tuple[bool, int]:
+def _check_redis(key: str, limit: int) -> tuple[bool, int, int]:
     client = _get_redis()
     if client is None:
         return _check_memory(key, limit)
@@ -86,22 +88,38 @@ def _check_redis(key: str, limit: int) -> tuple[bool, int]:
     bucket = int(now // 60)
     redis_key = f"argus:rl:{key}:{bucket}"
     try:
-        count = client.incr(redis_key)
+        count = int(client.incr(redis_key))
         if count == 1:
             client.expire(redis_key, 120)
         if count > limit:
             retry_after = int(60 - (now % 60)) + 1
-            return False, max(retry_after, 1)
-        return True, 0
+            return False, max(retry_after, 1), 0
+        return True, 0, max(limit - count, 0)
     except Exception as exc:
         log.warning("redis rate-limit error (%s) — falling back to memory", exc)
         return _check_memory(key, limit)
 
 
-def _check(key: str, limit: int) -> tuple[bool, int]:
+def _check(key: str, limit: int) -> tuple[bool, int, int]:
     if config.REDIS_URL:
         return _check_redis(key, limit)
     return _check_memory(key, limit)
+
+
+def _rate_limit_headers(limit: int, remaining: int, retry_after: int = 0) -> dict[str, str]:
+    headers = {
+        "X-RateLimit-Limit": str(limit),
+        "X-RateLimit-Remaining": str(remaining),
+        "X-RateLimit-Window": str(WINDOW_SECONDS),
+    }
+    if retry_after:
+        headers["Retry-After"] = str(retry_after)
+    return headers
+
+
+def attach_rate_limit_headers(response: Response, *, limit: int, remaining: int) -> None:
+    for key, value in _rate_limit_headers(limit, remaining).items():
+        response.headers[key] = value
 
 
 async def rate_limit_middleware(request: Request, call_next):
@@ -117,11 +135,13 @@ async def rate_limit_middleware(request: Request, call_next):
             ctx = None
     key = _client_key(request, ctx)
     limit = _limit_for(request)
-    ok, retry_after = _check(key, limit)
+    ok, retry_after, remaining = _check(key, limit)
     if not ok:
         return JSONResponse(
             {"error": "rate limit exceeded", "retry_after_seconds": retry_after},
             status_code=429,
-            headers={"Retry-After": str(retry_after)},
+            headers=_rate_limit_headers(limit, 0, retry_after),
         )
-    return await call_next(request)
+    response = await call_next(request)
+    attach_rate_limit_headers(response, limit=limit, remaining=remaining)
+    return response

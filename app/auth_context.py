@@ -9,6 +9,7 @@ from dataclasses import dataclass
 class AuthContext:
     is_admin: bool = False
     tenant: dict | None = None
+    api_key_id: str | None = None
 
     @property
     def tenant_id(self) -> str | None:

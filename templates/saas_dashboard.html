@@ -7,6 +7,9 @@
   th, td { text-align: left; padding: .45rem .5rem; border-bottom: 1px solid var(--line); }
   .stat { font-size: 1.4rem; font-weight: 700; color: var(--accent); }
   .warn-banner { background: #fff8e6; border: 1px solid #e8c96a; border-radius: 8px; padding: .6rem .85rem; margin-bottom: 1rem; }
+  .key-banner { background: #fff8e6; border: 1px solid #e8c96a; border-radius: 8px; padding: .75rem 1rem; margin-bottom: 1rem; }
+  .key-banner code { word-break: break-all; font-size: .82rem; }
+  .inline-form { display: inline; }
 </style>
 
 <div class="card">
@@ -18,6 +21,7 @@
       {% if portal_mode == 'admin' %}
       <a class="btn secondary" href="/ui/saas/app/admin">Refresh</a>
       {% else %}
+      <a class="btn secondary" href="/ui/compare">Compare runs</a>
       <a class="btn secondary" href="/ui/saas/billing">Billing</a>
       {% endif %}
       <form method="post" action="/ui/logout" style="display:inline"><button type="submit" class="secondary">Logout</button></form>
@@ -34,6 +38,18 @@
     <li class="small">{{ w.message }} ({{ w.pct }}%)</li>
     {% endfor %}
   </ul>
+</div>
+{% endif %}
+{% if tenant_message %}
+<p class="status-ok">{{ tenant_message }}</p>
+{% endif %}
+{% if tenant_error %}
+<p class="status-err">{{ tenant_error }}</p>
+{% endif %}
+{% if issued_api_key %}
+<div class="key-banner">
+  <p style="margin:0 0 .5rem"><strong>New API key — copy now</strong> (shown once)</p>
+  <code>{{ issued_api_key }}</code>
 </div>
 {% endif %}
 <div class="dash-grid">
@@ -72,6 +88,38 @@
   </table>
   {% else %}
   <p class="small">No runs yet — upload a photo above.</p>
+  {% endif %}
+  <p class="small" style="margin-top:.75rem"><a href="/ui/compare">Compare runs</a> — diff re-analyze score drift</p>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">API keys</h3>
+  <form method="post" action="/ui/saas/app/keys" class="toolbar" style="margin-bottom:1rem">
+    <label>Label (optional)
+      <input type="text" name="label" placeholder="e.g. ci-bot">
+    </label>
+    <div><button type="submit">Issue new key</button></div>
+  </form>
+  {% if tenant_keys %}
+  <table>
+    <tr><th>Label</th><th>Created</th><th>Status</th><th></th></tr>
+    {% for k in tenant_keys %}
+    <tr>
+      <td>{{ k.label or '—' }}{% if k.is_current %} <span class="badge">current</span>{% endif %}</td>
+      <td class="small">{{ k.created_at }}</td>
+      <td>{% if k.revoked_at %}revoked{% else %}active{% endif %}</td>
+      <td>
+        {% if not k.revoked_at and not k.is_current %}
+        <form class="inline-form" method="post" action="/ui/saas/app/keys/{{ k.id }}/revoke">
+          <button type="submit" class="secondary" onclick="return confirm('Revoke this key?')">Revoke</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="small">No keys listed.</p>
   {% endif %}
 </div>
 
@@ -160,7 +208,19 @@
 {% endif %}
 
 <div class="card">
-  <h3 style="margin-top:0">Audit log (recent)</h3>
+  <h3 style="margin-top:0">Audit log{% if portal_mode == 'admin' %}{% if audit_tenant or audit_action %} (filtered){% endif %}{% endif %}</h3>
+  {% if portal_mode == 'admin' %}
+  <form method="get" action="/ui/saas/app/admin" class="toolbar" style="margin-bottom:.75rem">
+    <label>Tenant
+      <input type="text" name="audit_tenant" value="{{ audit_tenant or '' }}" placeholder="tenant id">
+    </label>
+    <label>Action
+      <input type="text" name="audit_action" value="{{ audit_action or '' }}" placeholder="e.g. analyze.single">
+    </label>
+    <div><button type="submit" class="secondary">Filter</button></div>
+    {% if audit_tenant or audit_action %}<a class="btn secondary" href="/ui/saas/app/admin">Clear</a>{% endif %}
+  </form>
+  {% endif %}
   {% if audit_events %}
   <table>
     <tr><th>Time</th><th>Actor</th><th>Action</th><th>Status</th></tr>
