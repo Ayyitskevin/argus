@@ -28,6 +28,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from .sidecars import build_xmp
+
 
 @dataclass
 class ArgusConfig:
@@ -293,30 +295,8 @@ class ArgusClient:
         return written
 
     def _build_xmp(self, photo: dict) -> str:
-        """Build simple XMP from photo (uses suggested_iptc if present)."""
-        iptc = photo.get("suggested_iptc") or {}
-        headline = iptc.get("headline", "")
-        caption = iptc.get("caption", "")
-        kws = iptc.get("keywords") or photo.get("keywords", [])
-        def esc(s): return (str(s) or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")
-        kw_xml = "\n".join(f'        <rdf:li>{esc(k)}</rdf:li>' for k in kws)
-        return f'''<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d">
-<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="Argus">
-<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
- <rdf:Description rdf:about=""
-   xmlns:dc="http://purl.org/dc/elements/1.1/"
-   xmlns:Iptc4xmpCore="http://iptc.org/std/Iptc4xmpCore/1.0/xmlns/">
-  <dc:title><rdf:Alt><rdf:li xml:lang="x-default">{esc(headline)}</rdf:li></rdf:Alt></dc:title>
-  <dc:description><rdf:Alt><rdf:li xml:lang="x-default">{esc(caption)}</rdf:li></rdf:Alt></dc:description>
-  <dc:subject><rdf:Bag>
-{kw_xml}
-  </rdf:Bag></dc:subject>
-  <Iptc4xmpCore:Headline>{esc(headline)}</Iptc4xmpCore:Headline>
-  <Iptc4xmpCore:Caption>{esc(caption)}</Iptc4xmpCore:Caption>
- </rdf:Description>
-</rdf:RDF>
-</x:xmpmeta>
-<?xpacket end="w"?>'''
+        """Build XMP using the same exporter as the server."""
+        return build_xmp(photo)
 
     def analyze_and_write_sidecars(self, folder: str, limit: int = 20, target_dir: str = ".", sidecar_dir: Optional[str] = None) -> dict:
         """Convenience: analyze folder (server may queue), then fetch and write sidecars locally.

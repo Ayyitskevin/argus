@@ -74,3 +74,59 @@ def test_analyze_folder_sync(sample_image):
     exp = client.get(f"/runs/{run_id}/export")
     assert exp.status_code == 200
     assert exp.json()["run"]["id"] == run_id
+
+
+def test_write_sidecars_creates_json_iptc_and_xmp(sample_image, tmp_path):
+    from app.sidecars import write_sidecar
+
+    analysis = {
+        "image_path": sample_image,
+        "keywords": ["chef plated", "warm light"],
+        "suggested_iptc": {
+            "headline": "Plated Dish",
+            "caption": "A plated dish in warm light.",
+            "keywords": ["restaurant", "plated dish"],
+        },
+    }
+    written = write_sidecar(sample_image, analysis, sidecar_dir=tmp_path)
+    assert set(written) == {"argus", "iptc", "xmp"}
+    assert written["argus"].exists()
+    assert written["iptc"].exists()
+    assert written["xmp"].read_text(encoding="utf-8").startswith("<?xpacket")
+
+
+def test_job_claim_is_atomic(sample_image):
+    from app import db
+
+    folder = str(Path(sample_image).parent)
+    job_id = db.create_job(folder, source="test-source", model="mock:test")
+    claimed = db.claim_next_job()
+    assert claimed["id"] == job_id
+    assert claimed["status"] == "running"
+    assert db.claim_next_job() is None
+
+
+def test_analyze_upload_does_not_write_upload_sidecar(sample_image):
+    with open(sample_image, "rb") as f:
+        r = client.post(
+            "/analyze",
+            data={"write_sidecar": "true"},
+            files={"file": ("../escape.jpg", f, "image/jpeg")},
+        )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["model"].startswith("mock:")
+    assert body["sidecar_warning"].startswith("sidecar not written")
+
+
+def test_client_uses_shared_xmp_builder(sample_image):
+    from app.client import ArgusClient
+
+    photo = {
+        "image_path": sample_image,
+        "keywords": ["shared builder"],
+        "suggested_iptc": {"headline": "Shared", "caption": "Shared caption."},
+    }
+    xmp = ArgusClient()._build_xmp(photo)
+    assert "Shared" in xmp
+    assert "Shared caption." in xmp
