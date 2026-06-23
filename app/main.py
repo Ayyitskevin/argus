@@ -146,6 +146,10 @@ def view_run(run_id: int, request: Request):
                     p[key] = json.loads(val)
                 except Exception:
                     p[key] = {} if key != "keywords" else []
+            else:
+                p[key] = {} if key != "keywords" else []
+        if not p.get("shot_type"):
+            p["shot_type"] = row.get("shot_type") or "other"
         photos.append(p)
 
     return templates.TemplateResponse(

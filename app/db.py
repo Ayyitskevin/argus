@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS photo_analyses (
     image_path TEXT NOT NULL,
     width INTEGER,
     height INTEGER,
+    shot_type TEXT,          -- e.g. hero_plate, detail_texture, wide_establishing
     keywords TEXT,           -- JSON array string
     culling TEXT,            -- JSON object
     alt_text TEXT,
@@ -80,20 +81,21 @@ def create_run(source: str | None, model: str) -> int:
 
 
 def save_photo_analysis(run_id: int, data: dict) -> int:
-    """data keys: image_path, width, height, keywords(list), culling(dict),
+    """data keys: image_path, width, height, shot_type, keywords(list), culling(dict),
     alt_text, description, suggested_iptc(dict), raw_response(str)"""
     with tx() as con:
         cur = con.execute(
             """INSERT INTO photo_analyses
-               (run_id, image_path, width, height, keywords, culling,
+               (run_id, image_path, width, height, shot_type, keywords, culling,
                 alt_text, description, suggested_iptc, raw_response)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""
 ,
             (
                 run_id,
                 data["image_path"],
                 data.get("width"),
                 data.get("height"),
+                data.get("shot_type", "other"),
                 json.dumps(data.get("keywords") or []),
                 json.dumps(data.get("culling") or {}),
                 data.get("alt_text"),

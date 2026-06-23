@@ -12,39 +12,71 @@ from typing import Any
 
 import ollama
 from PIL import Image, ImageOps
+from pydantic import BaseModel, Field
 
 from . import config
 
+
+class Culling(BaseModel):
+    keeper_score: float = Field(ge=0.0, le=1.0)
+    hero_potential: float = Field(ge=0.0, le=1.0, default=0.5)
+    technical_quality: str
+    notes: str = ""
+
+
+class AnalysisResult(BaseModel):
+    image_path: str
+    width: int | None = None
+    height: int | None = None
+    shot_type: str = "other"
+    keywords: list[str] = Field(default_factory=list, max_length=20)
+    culling: Culling
+    alt_text: str = ""
+    description: str = ""
+    suggested_iptc: dict[str, Any] = Field(default_factory=dict)
+    raw_response: str = ""
+    model: str = ""
+
+
 log = logging.getLogger("argus.vision")
 
-SYSTEM_PROMPT = """You are an expert professional photographer and photo editor who specializes in food & beverage, restaurant, and event photography. You have 15+ years of experience culling, keywording, and preparing images for client delivery, albums, licensing, and web use.
+SYSTEM_PROMPT = """You are an expert professional photographer and photo editor who specializes in food & beverage, restaurant, and event photography. You have 15+ years of experience culling, keywording, sequencing for albums, and preparing images for client delivery, licensing, and web use.
 
-Your job is to produce precise, *actionable* structured metadata for the supplied photograph. Be specific and professional — avoid generic terms like "food on a plate". Use terminology a working photographer would actually write in a caption or keyword list.
+You evaluate images like a seasoned photo editor on a tight deadline:
+- Lighting quality and mood
+- Composition, depth, and framing
+- Subject matter specificity (especially food plating, textures, restaurant environments, candid moments)
+- Technical execution (focus, exposure, noise)
+- Storytelling / album value (hero potential, sequence role, emotional impact)
+
+Be extremely specific and professional. Never use generic language like "food on a table" or "nice photo". Use the exact kind of language a working F&B photographer would write in a shot list or album notes.
 
 Always return valid JSON only. No markdown, no explanations outside the JSON.
 """
 
 USER_PROMPT_TEMPLATE = """Analyze this photograph in detail.
 
-Return a single JSON object with exactly these keys:
+Return **only** a single valid JSON object with exactly these keys:
 
 {{
-  "keywords": [string, ...],          // 8–{max_tags} highly specific photography keywords (composition, lighting, subject matter, mood, technical notes, story role). Use terms like "overhead flat lay", "rim lighting", "shallow depth of field", "detail shot of seared scallop", "candid guest moment".
+  "shot_type": "wide_establishing" | "environmental_medium" | "hero_plate" | "detail_texture" | "candid_moment" | "portrait_subject" | "overhead_flatlay" | "action_sequence" | "table_scape" | "other",
+  "keywords": [string, ...],          // 8–{max_tags} highly specific photography terms. Prioritize: lighting (e.g. "rim lighting, steam, golden hour"), composition ("leading lines, negative space, shallow DOF"), subject specifics ("seared scallop with microgreens", "charred broccolini texture"), mood/story role.
   "culling": {{
-    "keeper_score": 0.0–1.0,          // overall recommendation strength (higher = stronger candidate for use)
+    "keeper_score": 0.0–1.0,          // overall "keeper" strength for delivery or album (higher = much more likely to use)
+    "hero_potential": 0.0–1.0,        // how strong this would be as a hero / spread anchor image
     "technical_quality": "excellent" | "good" | "fair" | "poor",
-    "notes": "short professional note on focus, exposure, color, composition issues or strengths"
+    "notes": "1-2 sentence professional editor note covering focus, exposure, color, distractions, and why it succeeds or fails"
   }},
-  "alt_text": "concise 1-sentence alt text suitable for web gallery (under 125 chars)",
-  "description": "rich 2–4 sentence description a photo editor could use or adapt",
+  "alt_text": "concise 1-sentence alt text suitable for web gallery (under 125 chars, descriptive but natural)",
+  "description": "rich 2–4 sentence description a photo editor could lift almost verbatim for proposals or captions",
   "suggested_iptc": {{
-    "headline": "short headline",
-    "caption": "full caption ready for delivery",
-    "keywords": [string, ...]           // IPTC-style keyword list (can overlap with top keywords)
+    "headline": "short punchy headline",
+    "caption": "full caption ready for client delivery",
+    "keywords": [string, ...]
   }}
 }}
 
-Prioritize usefulness for culling decisions and professional delivery. Be honest about technical shortcomings.
+Focus especially on what would help an album designer (mnemosyne) decide sequencing and hero selection. Be brutally honest on technical issues. Use F&B-specific language.
 """
 
 def _prepare_image(path: str | Path) -> tuple[bytes, tuple[int, int]]:
@@ -94,24 +126,39 @@ def analyze_image(image_path: str | Path, model: str | None = None) -> dict[str,
 
         culling = parsed.get("culling") or {}
         if not isinstance(culling, dict):
-            culling = {"keeper_score": 0.5, "technical_quality": "fair", "notes": str(culling)}
+            culling = {"keeper_score": 0.5, "hero_potential": 0.5, "technical_quality": "fair", "notes": str(culling)}
 
-        result = {
+        shot_type = (parsed.get("shot_type") or "other").strip().lower().replace(" ", "_")
+
+        culling_obj = Culling(
+            keeper_score=float(culling.get("keeper_score", 0.5)),
+            hero_potential=float(culling.get("hero_potential", 0.5)),
+            technical_quality=culling.get("technical_quality", "fair"),
+            notes=culling.get("notes", ""),
+        )
+
+        result_dict = {
             "image_path": str(image_path),
             "width": width,
             "height": height,
+            "shot_type": shot_type,
             "keywords": keywords,
-            "culling": {
-                "keeper_score": float(culling.get("keeper_score", 0.5)),
-                "technical_quality": culling.get("technical_quality", "fair"),
-                "notes": culling.get("notes", ""),
-            },
+            "culling": culling_obj.model_dump(),
             "alt_text": (parsed.get("alt_text") or "").strip(),
             "description": (parsed.get("description") or "").strip(),
             "suggested_iptc": parsed.get("suggested_iptc") or {},
             "raw_response": content,
             "model": model,
         }
+
+        # Validate with Pydantic (B step)
+        try:
+            validated = AnalysisResult(**result_dict)
+            result = validated.model_dump()
+        except Exception as ve:
+            log.warning("Pydantic validation failed, using raw dict: %s", ve)
+            result = result_dict
+
         log.info("analyzed %s | model=%s | tags=%d | score=%.2f", image_path, model, len(keywords), result["culling"]["keeper_score"])
         return result
 
@@ -122,8 +169,9 @@ def analyze_image(image_path: str | Path, model: str | None = None) -> dict[str,
             "image_path": str(image_path),
             "width": width,
             "height": height,
+            "shot_type": "other",
             "keywords": ["analysis-failed"],
-            "culling": {"keeper_score": 0.3, "technical_quality": "unknown", "notes": f"Error: {e}"},
+            "culling": {"keeper_score": 0.3, "hero_potential": 0.3, "technical_quality": "unknown", "notes": f"Error: {e}"},
             "alt_text": "Image analysis unavailable.",
             "description": "",
             "suggested_iptc": {},

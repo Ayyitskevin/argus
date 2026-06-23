@@ -6,7 +6,7 @@
   <div class="small">
     {{ run.source }} · {{ run.model }} · {{ run.photo_count }} photos
   </div>
-  <div class="nav"><a href="/">&#8592; new analysis</a></div>
+  <div class="nav"><a href="/">← new analysis</a></div>
 </div>
 
 <div class="photo-grid">
@@ -19,6 +19,8 @@
     <div class="meta">
       <div>
         <span class="score">Keeper {{ '%.0f'|format((p.culling.keeper_score or 0) * 100) }}%</span>
+        · Hero {{ '%.0f'|format((p.culling.hero_potential or 0) * 100) }}%
+        · <span class="tag">{{ p.shot_type or 'other' }}</span>
         · {{ p.culling.technical_quality or '—' }}
       </div>
 
