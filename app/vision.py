@@ -93,8 +93,8 @@ def _prepare_image(path: str | Path) -> tuple[bytes, tuple[int, int]]:
         return buf.getvalue(), (w, h)
 
 
-def analyze_image(image_path: str | Path, model: str | None = None) -> dict[str, Any]:
-    """Run vision analysis on a single local image path. Returns structured dict + raw."""
+def analyze_image(image_path: str | Path, model: str | None = None) -> AnalysisResult:
+    """Run vision analysis on a single local image path. Returns typed AnalysisResult."""
     model = model or config.VISION_MODEL
     img_bytes, (width, height) = _prepare_image(image_path)
     b64 = base64.b64encode(img_bytes).decode("utf-8")
@@ -137,51 +137,43 @@ def analyze_image(image_path: str | Path, model: str | None = None) -> dict[str,
             notes=culling.get("notes", ""),
         )
 
-        result_dict = {
-            "image_path": str(image_path),
-            "width": width,
-            "height": height,
-            "shot_type": shot_type,
-            "keywords": keywords,
-            "culling": culling_obj.model_dump(),
-            "alt_text": (parsed.get("alt_text") or "").strip(),
-            "description": (parsed.get("description") or "").strip(),
-            "suggested_iptc": parsed.get("suggested_iptc") or {},
-            "raw_response": content,
-            "model": model,
-        }
+        result = AnalysisResult(
+            image_path=str(image_path),
+            width=width,
+            height=height,
+            shot_type=shot_type,
+            keywords=keywords,
+            culling=culling_obj,
+            alt_text=(parsed.get("alt_text") or "").strip(),
+            description=(parsed.get("description") or "").strip(),
+            suggested_iptc=parsed.get("suggested_iptc") or {},
+            raw_response=content,
+            model=model,
+        )
 
-        # Validate with Pydantic (B step)
-        try:
-            validated = AnalysisResult(**result_dict)
-            result = validated.model_dump()
-        except Exception as ve:
-            log.warning("Pydantic validation failed, using raw dict: %s", ve)
-            result = result_dict
-
-        log.info("analyzed %s | model=%s | tags=%d | score=%.2f", image_path, model, len(keywords), result["culling"]["keeper_score"])
+        log.info("analyzed %s | model=%s | tags=%d | score=%.2f", image_path, model, len(keywords), result.culling.keeper_score)
         return result
 
     except Exception as e:
         log.exception("vision analysis failed for %s", image_path)
-        # Return graceful fallback so UI never explodes
-        return {
-            "image_path": str(image_path),
-            "width": width,
-            "height": height,
-            "shot_type": "other",
-            "keywords": ["analysis-failed"],
-            "culling": {"keeper_score": 0.3, "hero_potential": 0.3, "technical_quality": "unknown", "notes": f"Error: {e}"},
-            "alt_text": "Image analysis unavailable.",
-            "description": "",
-            "suggested_iptc": {},
-            "raw_response": str(e),
-            "model": model,
-        }
+        # Return graceful fallback
+        return AnalysisResult(
+            image_path=str(image_path),
+            width=width,
+            height=height,
+            shot_type="other",
+            keywords=["analysis-failed"],
+            culling=Culling(keeper_score=0.3, hero_potential=0.3, technical_quality="unknown", notes=f"Error: {e}"),
+            alt_text="Image analysis unavailable.",
+            description="",
+            suggested_iptc={},
+            raw_response=str(e),
+            model=model,
+        )
 
 
-def analyze_folder(folder: str | Path, model: str | None = None, limit: int | None = None) -> list[dict]:
-    """Analyze all supported images in a folder (non-recursive for Phase 0)."""
+def analyze_folder(folder: str | Path, model: str | None = None, limit: int | None = None) -> list[AnalysisResult]:
+    """Analyze all supported images in a folder (non-recursive for Phase 0). Returns typed results."""
     model = model or config.VISION_MODEL
     p = Path(folder)
     images = sorted(

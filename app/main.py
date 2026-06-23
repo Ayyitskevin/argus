@@ -16,6 +16,7 @@ from fastapi.templating import Jinja2Templates
 import uvicorn
 
 from . import config, db, vision
+from .vision import AnalysisResult, Culling  # for typed responses (C)
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("argus")
@@ -78,7 +79,7 @@ async def analyze_single(
                 return JSONResponse({"error": f"file not found: {path}"}, status_code=404)
 
         result = vision.analyze_image(str(image_path), model=model)
-        return result
+        return result.model_dump() if hasattr(result, "model_dump") else result
     finally:
         if tmp_path and tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
@@ -101,7 +102,9 @@ def analyze_folder_endpoint(
     analyses = vision.analyze_folder(p, model=model, limit=limit)
 
     for a in analyses:
-        db.save_photo_analysis(run_id, a)
+        # Support both Pydantic models and dicts
+        data = a.model_dump() if hasattr(a, "model_dump") else a
+        db.save_photo_analysis(run_id, data)
 
     con = db.connect()
     try:
@@ -110,15 +113,8 @@ def analyze_folder_endpoint(
     finally:
         db.close(con)
 
-    photos = [dict(row) for row in db.get_photos_for_run(run_id)]
-    # Parse JSON blobs for the caller
-    for ph in photos:
-        for key in ("keywords", "culling", "suggested_iptc"):
-            if ph.get(key):
-                try:
-                    ph[key] = json.loads(ph[key])
-                except Exception:
-                    pass
+    # Return typed data as dicts for JSON
+    photos = [a.model_dump() if hasattr(a, "model_dump") else a for a in analyses]
 
     return {
         "run_id": run_id,
