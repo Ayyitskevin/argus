@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+  <h2>Run #{{ run.id }}</h2>
+  <div class="small">
+    {{ run.source }} · {{ run.model }} · {{ run.photo_count }} photos
+  </div>
+  <div class="nav"><a href="/">&#8592; new analysis</a></div>
+</div>
+
+<div class="photo-grid">
+  {% for p in photos %}
+  <div class="photo">
+    <div class="photo-header">
+      <strong>{{ p.image_path | basename }}</strong>
+      <span class="small">({{ p.width }}×{{ p.height }})</span>
+    </div>
+    <div class="meta">
+      <div>
+        <span class="score">Keeper {{ '%.0f'|format((p.culling.keeper_score or 0) * 100) }}%</span>
+        · {{ p.culling.technical_quality or '—' }}
+      </div>
+
+      <div style="margin: .5rem 0 .25rem;">
+        {% for tag in p.keywords %}
+          <span class="tag">{{ tag }}</span>
+        {% endfor %}
+        {% if not p.keywords %}<span class="small">(no tags)</span>{% endif %}
+      </div>
+
+      <div><strong>Alt text:</strong> {{ p.alt_text or '—' }}</div>
+
+      {% if p.culling.notes %}
+      <div style="margin-top:.35rem"><strong>Notes:</strong> {{ p.culling.notes }}</div>
+      {% endif %}
+
+      <details style="margin-top:.5rem">
+        <summary class="small">Full description + suggested IPTC</summary>
+        <div style="margin-top:.3rem; white-space: pre-wrap; font-size:.85rem;">{{ p.description or '' }}</div>
+        <pre style="margin-top:.4rem">{{ p.suggested_iptc | tojson }}</pre>
+      </details>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{% if not photos %}
+<p>No photos in this run.</p>
+{% endif %}
+{% endblock %}

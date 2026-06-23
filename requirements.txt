@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+jinja2
+python-multipart
+pillow
+ollama
+pydantic
+httpx
+python-dotenv
