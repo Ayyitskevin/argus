@@ -3,6 +3,8 @@ uvicorn[standard]
 jinja2
 python-multipart
 pillow
+# Optional: HEIC/HEIF decode (pip install pillow-heif)
+# pillow-heif
 
 pydantic
 httpx

@@ -29,7 +29,11 @@ HOST = os.environ.get("ARGUS_HOST", "127.0.0.1")
 PORT = int(os.environ.get("ARGUS_PORT", "8010"))  # avoid clashing with mise 8400 / odysseus 7010
 
 # Photo handling
-PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".tif", ".tiff"}
+PHOTO_EXTS = {
+    ".jpg", ".jpeg", ".png", ".heic", ".heif", ".webp", ".tif", ".tiff",
+    # RAW — analyzed via embedded preview (exiftool) when Pillow cannot decode
+    ".cr2", ".cr3", ".nef", ".arw", ".dng", ".orf", ".raf", ".rw2",
+}
 
 # Prompt / analysis tuning
 DEFAULT_MAX_TAGS = int(os.environ.get("ARGUS_MAX_TAGS", "12"))

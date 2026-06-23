@@ -9,13 +9,14 @@ import hashlib
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageOps
 from pydantic import BaseModel, Field
 
-from . import config, metrics
+from . import config, metrics, structured_log
+from .image_io import prepare_jpeg_bytes, thumbnail_jpeg_bytes
 from .grok_client import GrokVisionError, chat_vision, message_json_text, parse_usage
 
 
@@ -164,33 +165,34 @@ def system_prompt() -> str:
 
 
 def make_thumbnail(path: str | Path, max_side: int = 512) -> bytes:
-    """Return JPEG bytes of a downscaled thumbnail (orientation-corrected).
-
-    Used by the /thumb endpoint to preview stored analyses without serving
-    full-resolution originals."""
-    import io
-    with Image.open(Path(path)) as im:
-        im = ImageOps.exif_transpose(im)
-        if im.mode != "RGB":
-            im = im.convert("RGB")
-        im.thumbnail((max_side, max_side))
-        buf = io.BytesIO()
-        im.save(buf, format="JPEG", quality=85)
-        return buf.getvalue()
+    """Return JPEG bytes of a downscaled thumbnail (orientation-corrected)."""
+    return thumbnail_jpeg_bytes(path, max_side=max_side)
 
 
 def _prepare_image(path: str | Path) -> tuple[bytes, tuple[int, int]]:
     """Open, transpose orientation, convert, return bytes + (w, h)."""
-    import io
-    p = Path(path)
-    with Image.open(p) as im:
-        im = ImageOps.exif_transpose(im)
-        if im.mode != "RGB":
-            im = im.convert("RGB")
-        w, h = im.size
-        buf = io.BytesIO()
-        im.save(buf, format="JPEG", quality=92)
-        return buf.getvalue(), (w, h)
+    return prepare_jpeg_bytes(path)
+
+
+def _log_image_analyzed(
+    *,
+    image_path: str | Path,
+    model: str,
+    result: AnalysisResult | None,
+    started: float,
+    failed: bool = False,
+) -> None:
+    latency_ms = round((time.perf_counter() - started) * 1000, 1)
+    structured_log.event(
+        "vision.image_analyzed",
+        path=str(image_path),
+        model=(result.model if result else model) or model,
+        latency_ms=latency_ms,
+        width=result.width if result else None,
+        height=result.height if result else None,
+        failed=failed or bool(result and result.analysis_failed),
+        backend=config.VISION_BACKEND,
+    )
 
 
 def _extract_json_blob(text: str) -> str:
@@ -313,6 +315,7 @@ def analyze_image(
 
     Honors config.VISION_BACKEND: "mock" (CI default) or "grok"/"real" (xAI API).
     Optional learned `prefs` nudge the result in either mode."""
+    started = time.perf_counter()
     model = model or config.VISION_MODEL
     img_bytes, (width, height) = _prepare_image(image_path)
 
@@ -347,11 +350,12 @@ def analyze_image(
                 cost_usd=usage.get("cost_usd"),
                 grok_api_calls=1 if usage.get("provider") == "grok" else 0,
             )
+            _log_image_analyzed(image_path=image_path, model=model, result=result, started=started)
             return result
         except CloudVisionError as exc:
             log.error("cloud vision failed for %s: %s", image_path, exc)
             err = str(exc)
-            return AnalysisResult(
+            failed = AnalysisResult(
                 image_path=str(image_path),
                 width=width,
                 height=height,
@@ -370,9 +374,13 @@ def analyze_image(
                 model=f"{provider}:{model}",
                 analysis_failed=True,
             )
+            _log_image_analyzed(image_path=image_path, model=model, result=failed, started=started)
+            return failed
 
     if config.VISION_BACKEND == "mock":
-        return _apply_prefs(_mock_result(image_path, width, height, model), prefs)
+        mock = _apply_prefs(_mock_result(image_path, width, height, model), prefs)
+        _log_image_analyzed(image_path=image_path, model=model, result=mock, started=started)
+        return mock
 
     if config.VISION_BACKEND != "grok":
         raise ValueError(f"unsupported VISION_BACKEND: {config.VISION_BACKEND}")
@@ -438,7 +446,9 @@ def analyze_image(
         )
 
         log.info("analyzed %s | model=%s | tags=%d | score=%.2f", image_path, model, len(keywords), result.culling.keeper_score)
-        return _apply_prefs(result, prefs)
+        final = _apply_prefs(result, prefs)
+        _log_image_analyzed(image_path=image_path, model=model, result=final, started=started)
+        return final
 
     except GrokVisionError as e:
         log.error("grok vision failed for %s: %s", image_path, e)
@@ -450,8 +460,7 @@ def analyze_image(
         err = None
 
     if err is not None:
-        # Return graceful fallback
-        return AnalysisResult(
+        failed = AnalysisResult(
             image_path=str(image_path),
             width=width,
             height=height,
@@ -465,6 +474,8 @@ def analyze_image(
             model=f"grok:{model}",
             analysis_failed=True,
         )
+        _log_image_analyzed(image_path=image_path, model=model, result=failed, started=started)
+        return failed
 
 
 def collect_folder_images(folder: str | Path, *, recursive: bool = False) -> list[Path]:

@@ -40,3 +40,7 @@ See `docs/PHASE-0.md` for exact scope and success criteria.
 Install `plugins/lightroom/Argus.lrplugin` in Lightroom Classic — post-export hook calls
 `docs/lightroom_export_stub.py` over tailnet and writes sidecars locally.
 See [`plugins/lightroom/README.md`](plugins/lightroom/README.md).
+
+Capture One uses the same Python stub via [`plugins/capture-one/argus_post_export.sh`](plugins/capture-one/argus_post_export.sh).
+
+Async integrations: `from app.async_client import AsyncArgusClient`.

@@ -7,7 +7,7 @@ Features:
 - Context manager support
 - Sidecar writing helpers (local fetch + write)
 - Error handling via ArgusError
-- Async stubs (for future aiohttp)
+- AsyncArgusClient in app.async_client (httpx async)
 
 All operations use mock by default on the server side for safety (no model load).
 
@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from .client_common import build_analyze_folder_form, build_job_payload
 from .sidecars import build_xmp
 
 
@@ -110,13 +111,18 @@ class ArgusClient:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._client.close()
 
-    # Async stubs (Phase 1+). Implement with httpx async if needed.
-    async def analyze_folder_async(self, *args, **kwargs):
-        """Async stub. Requires httpx async client."""
-        raise NotImplementedError("Async support not implemented. Use sync version.")
-
-    async def analyze_single_async(self, *args, **kwargs):
-        raise NotImplementedError("Async support not implemented.")
+    def retry_job(self, job_id: str) -> dict[str, Any]:
+        """POST /jobs/{id}/retry — re-queue a failed or dead_letter job."""
+        try:
+            resp = self._client.post(
+                f"{self.base_url}/jobs/{job_id}/retry",
+                json={},
+                headers=self._auth_headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+            raise ArgusError(f"retry_job failed: {exc}") from exc
 
     def analyze_folder(
         self,
@@ -136,27 +142,19 @@ class ArgusClient:
         ARGUS_MISE_MEDIA_ROOT + mise layout if folder not provided).
         client_id triggers learned preferences application.
         """
-        data = {
-            "limit": str(limit),
-            "write_sidecars": str(write_sidecars).lower(),
-        }
-        if folder:
-            data["folder"] = folder
-        if model:
-            data["model"] = model
-        if sidecar_dir:
-            data["sidecar_dir"] = sidecar_dir
-        if mise_gallery_id is not None:
-            data["mise_gallery_id"] = str(mise_gallery_id)
-        if mise_project_id is not None:
-            data["mise_project_id"] = str(mise_project_id)
         effective_client_id = client_id or self.default_client_id
-        if effective_client_id:
-            data["client_id"] = effective_client_id
-        if recursive:
-            data["recursive"] = "true"
-        if callback_url:
-            data["callback_url"] = callback_url
+        data = build_analyze_folder_form(
+            folder=folder,
+            model=model,
+            limit=limit,
+            write_sidecars=write_sidecars,
+            sidecar_dir=sidecar_dir,
+            mise_gallery_id=mise_gallery_id,
+            mise_project_id=mise_project_id,
+            client_id=effective_client_id,
+            recursive=recursive,
+            callback_url=callback_url,
+        )
 
         url = f"{self.base_url}/analyze-folder"
         return self._request("post", url, data=data, method_name="analyze_folder")
@@ -174,21 +172,17 @@ class ArgusClient:
         model: Optional[str] = None,
     ) -> dict[str, Any]:
         """POST /jobs — explicit queue submission with optional callback."""
-        payload = {
-            "folder": folder,
-            "limit": limit,
-            "write_sidecars": write_sidecars,
-            "recursive": recursive,
-        }
-        if sidecar_dir:
-            payload["sidecar_dir"] = sidecar_dir
         effective_client_id = client_id or self.default_client_id
-        if effective_client_id:
-            payload["client_id"] = effective_client_id
-        if callback_url:
-            payload["callback_url"] = callback_url
-        if model:
-            payload["model"] = model
+        payload = build_job_payload(
+            folder=folder,
+            limit=limit,
+            write_sidecars=write_sidecars,
+            sidecar_dir=sidecar_dir,
+            client_id=effective_client_id,
+            callback_url=callback_url,
+            recursive=recursive,
+            model=model,
+        )
         try:
             resp = self._client.post(
                 f"{self.base_url}/jobs",
