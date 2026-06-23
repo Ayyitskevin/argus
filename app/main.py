@@ -23,6 +23,7 @@ from .callbacks import is_allowed_callback_url
 from .jobs import JobWorker
 from .sidecars import write_sidecar
 from .vision import make_thumbnail
+from .vision_status import vision_status
 
 logging.basicConfig(level=logging.INFO)
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -36,6 +37,13 @@ STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.filters["basename"] = os.path.basename
+
+
+def _ui_context(**extra) -> dict:
+    """Shared template context for HTML pages (vision banner + model)."""
+    ctx = {"model": config.VISION_MODEL, "vision": vision_status()}
+    ctx.update(extra)
+    return ctx
 
 
 class PhotoPatch(BaseModel):
@@ -144,6 +152,11 @@ def healthz():
     }
 
 
+@app.get("/vision/status", response_class=JSONResponse)
+def get_vision_status():
+    return vision_status()
+
+
 @app.get("/metrics", response_class=JSONResponse)
 def get_metrics():
     return metrics.snapshot()
@@ -188,7 +201,7 @@ def home(request: Request):
     return templates.TemplateResponse(
         request,
         "index.html",
-        {"recent_runs": recent, "model": config.VISION_MODEL},
+        _ui_context(recent_runs=recent),
     )
 
 
@@ -381,19 +394,19 @@ def _run_review_context(data: dict, **filters) -> dict:
     run = data["run"]
     shot_types = sorted({photo.get("shot_type") or "other" for photo in photos})
     filtered = service.sort_and_filter_photos(photos, **filters)
-    return {
-        "run": run,
-        "photos": filtered,
-        "all_photos": photos,
-        "heroes": service.hero_candidates(photos),
-        "shot_types": shot_types,
-        "client_id": service.extract_client_id(run.get("source")),
-        "model": run.get("model"),
-        "sort": filters.get("sort", "keeper"),
-        "filter_shot_type": filters.get("shot_type"),
-        "filter_keyword": filters.get("keyword"),
-        "filter_min_keeper": filters.get("min_keeper"),
-    }
+    return _ui_context(
+        run=run,
+        photos=filtered,
+        all_photos=photos,
+        heroes=service.hero_candidates(photos),
+        shot_types=shot_types,
+        client_id=service.extract_client_id(run.get("source")),
+        model=run.get("model") or config.VISION_MODEL,
+        sort=filters.get("sort", "keeper"),
+        filter_shot_type=filters.get("shot_type"),
+        filter_keyword=filters.get("keyword"),
+        filter_min_keeper=filters.get("min_keeper"),
+    )
 
 
 @app.get("/runs/compare", response_class=JSONResponse)

@@ -14,8 +14,8 @@ from typing import Any
 from PIL import Image, ImageOps
 from pydantic import BaseModel, Field
 
-from . import config
-from .grok_client import GrokVisionError, chat_vision, message_json_text
+from . import config, metrics
+from .grok_client import GrokVisionError, chat_vision, message_json_text, parse_usage
 
 
 class Culling(BaseModel):
@@ -251,6 +251,7 @@ def analyze_image(
                 model=model,
                 temperature=temperature,
             )
+            metrics.record_grok_usage(parse_usage(api_resp))
             content = _grok_json_content(api_resp)
             return _parse_vision_payload(content)
 

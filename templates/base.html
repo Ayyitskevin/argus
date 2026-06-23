@@ -71,7 +71,11 @@
     <div class="header">
       <h1 style="margin:0">argus <span class="small">/ photometa</span></h1>
       <div class="small">
-        {{ model or '—' }} · <a href="/healthz">/healthz</a> · <a href="/">home</a>
+        {{ model or '—' }}
+        {% if vision %}· {{ vision.provider }}/{{ vision.backend }}{% endif %}
+        · <a href="/healthz">health</a>
+        · <a href="/vision/status">vision</a>
+        · <a href="/">home</a>
       </div>
     </div>
     {% block content %}{% endblock %}

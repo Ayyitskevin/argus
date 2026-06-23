@@ -1,44 +1,101 @@
 {% extends "base.html" %}
 
 {% block content %}
+{% if vision %}
+<div class="card" style="border-color: {% if vision.ready %}var(--accent-soft){% else %}#f5d0d0{% endif %}; background: {% if vision.ready %}#f8fbf9{% else %}#fff8f8{% endif %};">
+  <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; flex-wrap:wrap;">
+    <div>
+      <h2 style="margin:0 0 .35rem 0; font-size:1.05rem">Vision status</h2>
+      <p class="small" style="margin:0">{{ vision.message }}</p>
+    </div>
+    <div class="small" style="text-align:right">
+      <span class="badge">{{ vision.provider }}</span>
+      <span class="badge">{{ vision.backend }}</span>
+      {% if vision.api_key_configured %}<span class="badge">key ✓</span>{% else %}<span class="badge" style="background:#fde8e8;color:#a11">no key</span>{% endif %}
+    </div>
+  </div>
+  <div class="toolbar" style="margin-top:.75rem; margin-bottom:0">
+    <div class="small">Model: <strong>{{ vision.model }}</strong></div>
+    {% if vision.backend == 'grok' %}
+    <div class="small">Grok calls this session: <strong>{{ vision.grok_usage.grok_api_calls | default(0) }}</strong></div>
+    {% endif %}
+    {% if vision.grok_cost_usd %}
+    <div class="small">Est. cost: <strong>${{ "%.4f"|format(vision.grok_cost_usd) }}</strong></div>
+    {% endif %}
+    <a class="btn secondary" href="/vision/status" style="font-size:.78rem; padding:.3rem .6rem">JSON status</a>
+    {% if recent_runs %}
+    <a class="btn" href="/runs/{{ recent_runs[0].id }}" style="font-size:.78rem; padding:.3rem .6rem">Latest run →</a>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
 <div class="card">
-  <h2>Analyze photographs</h2>
+  <h2>Cull &amp; analyze</h2>
   <p class="small">
-    Local dogfood tool. Use a real folder of edited photos for the best test.
-    Results land in SQLite and open in the <strong>review UI</strong> for culling.
+    Point Argus at a folder of edited photos. Results land in SQLite and open in the
+    <strong>review UI</strong> for keeper scoring and keyword edits.
   </p>
 
   <form action="/analyze-folder" method="post" style="margin-bottom: 1.25rem;">
-    <div>
-      <label><strong>Local folder path</strong></label><br>
-      <input type="text" name="folder" style="width: 65%" placeholder="/home/kevin-lee/photos/your-gallery" required>
-      <input type="number" name="limit" value="15" min="1" max="100" style="width: 70px" title="max photos">
-      <button type="submit">Analyze folder</button>
+    <div class="toolbar">
+      <label style="flex:1; min-width:220px">
+        <span>Local folder path</span>
+        <input type="text" name="folder" style="width:100%" placeholder="/home/kevin-lee/photos/your-gallery" required>
+      </label>
+      <label>
+        <span>Limit</span>
+        <input type="number" name="limit" value="15" min="1" max="100" style="width: 70px" title="max photos">
+      </label>
+      <label>
+        <span>Client ID</span>
+        <input type="text" name="client_id" value="tailnet" placeholder="client slug" style="width: 110px">
+      </label>
+      <label style="justify-content:end">
+        <span>&nbsp;</span>
+        <label style="flex-direction:row; align-items:center; gap:.35rem; font-size:.85rem; color:var(--ink)">
+          <input type="checkbox" name="recursive" value="true"> Recursive
+        </label>
+      </label>
+      <label style="justify-content:end">
+        <span>&nbsp;</span>
+        <button type="submit">Analyze folder</button>
+      </label>
     </div>
-    <div class="small" style="margin-top: .3rem">Only images with supported extensions are processed.</div>
+    <div class="small" style="margin-top: .3rem">Supported: jpg, png, heic, webp, tiff. Jobs queue when ARGUS_QUEUE_ENABLED=true.</div>
   </form>
 
   <form action="/analyze" method="post" enctype="multipart/form-data">
-    <div>
-      <label><strong>Single image upload</strong> (quick test)</label><br>
-      <input type="file" name="file" accept="image/*">
-      <button type="submit">Analyze image</button>
+    <div class="toolbar">
+      <label style="flex:1">
+        <span>Single image upload (quick test)</span>
+        <input type="file" name="file" accept="image/*">
+      </label>
+      <label>
+        <span>Client ID</span>
+        <input type="text" name="client_id" value="upload" style="width: 90px">
+      </label>
+      <label style="justify-content:end">
+        <span>&nbsp;</span>
+        <button type="submit">Analyze image</button>
+      </label>
     </div>
   </form>
 </div>
 
 {% if recent_runs %}
 <div class="card">
-  <h3>Recent runs</h3>
+  <h3>Recent runs — jump to culling</h3>
   <ul style="padding-left:1.1rem; margin:0">
     {% for r in recent_runs %}
       <li style="margin-bottom:.35rem">
-        <a href="/runs/{{ r.id }}">Run #{{ r.id }}</a>
+        <a href="/runs/{{ r.id }}"><strong>Run #{{ r.id }}</strong></a>
         — {{ r.source or '(upload)' }}
         <span class="small">({{ r.photo_count or 0 }} photos) · {{ r.created_at }}</span>
       </li>
     {% endfor %}
   </ul>
+  <p class="small" style="margin:.5rem 0 0"><a href="/runs/compare">Compare runs</a> · export JSON/CSV from any run page</p>
 </div>
 {% endif %}
 {% endblock %}

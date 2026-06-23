@@ -21,6 +21,13 @@ _counters: dict[str, int] = {
     "preferences_writes": 0,
     "photo_corrections": 0,
     "runs_archived": 0,
+    "grok_api_calls": 0,
+    "grok_prompt_tokens": 0,
+    "grok_completion_tokens": 0,
+    "grok_total_tokens": 0,
+}
+_gauges: dict[str, float] = {
+    "grok_cost_usd": 0.0,
 }
 
 
@@ -29,11 +36,28 @@ def inc(name: str, amount: int = 1) -> None:
         _counters[name] = _counters.get(name, 0) + amount
 
 
+def add_float(name: str, amount: float) -> None:
+    with _lock:
+        _gauges[name] = _gauges.get(name, 0.0) + amount
+
+
+def record_grok_usage(usage: dict) -> None:
+    """Increment Grok API counters from a parse_usage() dict."""
+    inc("grok_api_calls")
+    inc("grok_prompt_tokens", int(usage.get("prompt_tokens") or 0))
+    inc("grok_completion_tokens", int(usage.get("completion_tokens") or 0))
+    inc("grok_total_tokens", int(usage.get("total_tokens") or 0))
+    cost = usage.get("cost_usd")
+    if cost is not None:
+        add_float("grok_cost_usd", float(cost))
+
+
 def snapshot() -> dict:
     with _lock:
         return {
             "uptime_seconds": round(time.time() - _started_at, 1),
             "counters": dict(_counters),
+            "gauges": {k: round(v, 6) for k, v in _gauges.items()},
         }
 
 
@@ -51,6 +75,15 @@ def prometheus_text() -> str:
             [
                 f"# HELP {metric} Argus counter {name}.",
                 f"# TYPE {metric} counter",
+                f"{metric} {value}",
+            ]
+        )
+    for name, value in sorted(snap["gauges"].items()):
+        metric = f"argus_{name}"
+        lines.extend(
+            [
+                f"# HELP {metric} Argus gauge {name}.",
+                f"# TYPE {metric} gauge",
                 f"{metric} {value}",
             ]
         )
