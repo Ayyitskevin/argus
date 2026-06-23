@@ -5,11 +5,19 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from . import config, db, metrics, vision
+from . import config, db, metrics, metering, vision
+from .auth_context import get_tenant_id
+from .metering import MeteringError
 from .sidecars import write_sidecar
 from .callbacks import is_allowed_callback_url
 
 log = logging.getLogger("argus.service")
+
+
+def _tenant_dict(tenant_id: str | None) -> dict | None:
+    if not tenant_id:
+        return None
+    return db.get_tenant(tenant_id)
 
 
 def extract_client_id(source: str | None) -> str | None:
@@ -138,11 +146,18 @@ def analyze_single_image(
     image_path: Path,
     model: str | None = None,
     client_id: str | None = None,
+    tenant: dict | None = None,
 ) -> dict:
     """Analyze one local image path and persist it as a single-photo run."""
     model = model or config.VISION_MODEL
+    tenant = tenant or (_tenant_dict(get_tenant_id()))
+    tenant_id = tenant["id"] if tenant else None
+    try:
+        metering.enforce_caps(tenant_id, images=1)
+    except MeteringError as exc:
+        raise AnalyzeError(exc.message, exc.status_code) from exc
     prefs = load_preferences(client_id)
-    analysis = vision.analyze_image(str(image_path), model=model, prefs=prefs)
+    analysis = vision.analyze_image(str(image_path), model=model, prefs=prefs, tenant=tenant)
     data = result_to_dict(analysis)
     if client_id:
         data["client_id"] = client_id
@@ -244,9 +259,17 @@ def analyze_folder_run(
     sidecar_dir: str | None = None,
     client_id: str | None = None,
     recursive: bool = False,
+    tenant: dict | None = None,
 ) -> dict:
     """Analyze and persist a folder synchronously."""
     model = model or config.VISION_MODEL
+    tenant = tenant or (_tenant_dict(get_tenant_id()))
+    tenant_id = tenant["id"] if tenant else None
+    planned = limit or 20
+    try:
+        metering.enforce_caps(tenant_id, images=planned)
+    except MeteringError as exc:
+        raise AnalyzeError(exc.message, exc.status_code) from exc
     prefs = load_preferences(client_id)
     analyses = vision.analyze_folder(
         folder,
@@ -254,6 +277,7 @@ def analyze_folder_run(
         limit=limit,
         prefs=prefs,
         recursive=recursive,
+        tenant=tenant,
     )
     out = persist_analysis_run(
         source=source,
@@ -470,6 +494,7 @@ def perform_folder_analyze(
     client_id: str | None = None,
     recursive: bool = False,
     callback_url: str | None = None,
+    tenant: dict | None = None,
 ) -> dict:
     """Shared folder analyze for JSON API and browser UI flows."""
     path, mise_info, attempted = resolve_mise_folder(
@@ -488,6 +513,7 @@ def perform_folder_analyze(
     if callback_url and not is_allowed_callback_url(callback_url):
         raise AnalyzeError("callback_url must be local or tailnet (http/https)", 400)
 
+    tenant = tenant or _tenant_dict(get_tenant_id())
     project_id = str(mise_project_id) if mise_project_id is not None else None
     source = source_label(path, mise_info=mise_info, client_id=client_id)
     model_name = model or config.VISION_MODEL
@@ -536,6 +562,7 @@ def perform_folder_analyze(
         sidecar_dir=sidecar_dir,
         client_id=client_id,
         recursive=recursive,
+        tenant=tenant,
     )
     metrics.inc("analyze_folder")
     metrics.inc("photos_analyzed", result["count"])

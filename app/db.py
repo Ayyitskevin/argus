@@ -73,6 +73,41 @@ CREATE TABLE IF NOT EXISTS preferences (
 );
 
 CREATE INDEX IF NOT EXISTS idx_prefs_client ON preferences(client_id, style);
+
+CREATE TABLE IF NOT EXISTS tenants (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1,
+    vision_provider TEXT NOT NULL DEFAULT 'grok',
+    cost_cap_usd REAL,
+    monthly_image_cap INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS tenant_api_keys (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    key_prefix TEXT NOT NULL,
+    key_hash TEXT NOT NULL,
+    label TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    revoked_at TEXT,
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tenant_keys_prefix ON tenant_api_keys(key_prefix);
+
+CREATE TABLE IF NOT EXISTS tenant_usage (
+    tenant_id TEXT NOT NULL,
+    period TEXT NOT NULL,
+    images_analyzed INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    grok_api_calls INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (tenant_id, period),
+    FOREIGN KEY(tenant_id) REFERENCES tenants(id)
+);
 """
 
 _SCHEMA_LOCK = threading.Lock()
@@ -649,6 +684,223 @@ def get_client_history_stats(client_id: str) -> dict:
             "avg_hero_potential": round(sum(hero_scores) / len(hero_scores), 3)
             if hero_scores
             else None,
+        }
+    finally:
+        close(con)
+
+
+def _tenant_dict(row: sqlite3.Row | None) -> dict | None:
+    if row is None:
+        return None
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "active": bool(row["active"]),
+        "vision_provider": row["vision_provider"],
+        "cost_cap_usd": row["cost_cap_usd"],
+        "monthly_image_cap": row["monthly_image_cap"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def create_tenant(
+    tenant_id: str,
+    *,
+    name: str,
+    vision_provider: str = "grok",
+    cost_cap_usd: float | None = None,
+    monthly_image_cap: int | None = None,
+) -> dict:
+    with tx() as con:
+        con.execute(
+            """INSERT INTO tenants (id, name, vision_provider, cost_cap_usd, monthly_image_cap, updated_at)
+               VALUES (?, ?, ?, ?, ?, datetime('now'))""",
+            (tenant_id, name, vision_provider, cost_cap_usd, monthly_image_cap),
+        )
+    tenant = get_tenant(tenant_id)
+    assert tenant is not None
+    return tenant
+
+
+def get_tenant(tenant_id: str) -> dict | None:
+    con = connect()
+    try:
+        row = con.execute("SELECT * FROM tenants WHERE id=?", (tenant_id,)).fetchone()
+        return _tenant_dict(row)
+    finally:
+        close(con)
+
+
+def list_tenants(*, active_only: bool = False) -> list[dict]:
+    con = connect()
+    try:
+        sql = "SELECT * FROM tenants"
+        if active_only:
+            sql += " WHERE active=1"
+        sql += " ORDER BY id"
+        return [_tenant_dict(row) for row in con.execute(sql).fetchall()]
+    finally:
+        close(con)
+
+
+def update_tenant(tenant_id: str, **fields) -> dict | None:
+    allowed = {"name", "active", "vision_provider", "cost_cap_usd", "monthly_image_cap"}
+    updates = {k: v for k, v in fields.items() if k in allowed}
+    if not updates:
+        return get_tenant(tenant_id)
+    if "active" in updates:
+        updates["active"] = 1 if updates["active"] else 0
+    assignments = ", ".join(f"{key}=?" for key in updates)
+    values = list(updates.values()) + [tenant_id]
+    with tx() as con:
+        con.execute(
+            f"UPDATE tenants SET {assignments}, updated_at=datetime('now') WHERE id=?",
+            values,
+        )
+    return get_tenant(tenant_id)
+
+
+def insert_tenant_api_key(
+    *,
+    key_id: str,
+    tenant_id: str,
+    key_prefix: str,
+    key_hash: str,
+    label: str | None = None,
+) -> None:
+    with tx() as con:
+        con.execute(
+            """INSERT INTO tenant_api_keys (id, tenant_id, key_prefix, key_hash, label)
+               VALUES (?, ?, ?, ?, ?)""",
+            (key_id, tenant_id, key_prefix, key_hash, label),
+        )
+
+
+def find_tenant_by_key_prefix(key_prefix: str) -> list[dict]:
+    con = connect()
+    try:
+        rows = con.execute(
+            """SELECT k.id AS key_id, k.key_hash, k.revoked_at, k.label,
+                      t.id AS tenant_id, t.name, t.active, t.vision_provider,
+                      t.cost_cap_usd, t.monthly_image_cap, t.created_at, t.updated_at
+               FROM tenant_api_keys k
+               JOIN tenants t ON t.id = k.tenant_id
+               WHERE k.key_prefix=? AND k.revoked_at IS NULL AND t.active=1""",
+            (key_prefix,),
+        ).fetchall()
+        out = []
+        for row in rows:
+            tenant = {
+                "id": row["tenant_id"],
+                "name": row["name"],
+                "active": bool(row["active"]),
+                "vision_provider": row["vision_provider"],
+                "cost_cap_usd": row["cost_cap_usd"],
+                "monthly_image_cap": row["monthly_image_cap"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+            }
+            out.append({"key_id": row["key_id"], "key_hash": row["key_hash"], "tenant": tenant})
+        return out
+    finally:
+        close(con)
+
+
+def revoke_tenant_api_key(key_id: str) -> bool:
+    with tx() as con:
+        cur = con.execute(
+            "UPDATE tenant_api_keys SET revoked_at=datetime('now') WHERE id=? AND revoked_at IS NULL",
+            (key_id,),
+        )
+        return cur.rowcount > 0
+
+
+def list_tenant_keys(tenant_id: str) -> list[dict]:
+    con = connect()
+    try:
+        rows = con.execute(
+            """SELECT id, tenant_id, key_prefix, label, created_at, revoked_at
+               FROM tenant_api_keys WHERE tenant_id=? ORDER BY created_at DESC""",
+            (tenant_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        close(con)
+
+
+def _usage_period(dt: datetime | None = None) -> str:
+    dt = dt or datetime.now()
+    return dt.strftime("%Y-%m")
+
+
+def get_tenant_usage(tenant_id: str, period: str | None = None) -> dict:
+    period = period or _usage_period()
+    con = connect()
+    try:
+        row = con.execute(
+            "SELECT * FROM tenant_usage WHERE tenant_id=? AND period=?",
+            (tenant_id, period),
+        ).fetchone()
+        if row is None:
+            return {
+                "tenant_id": tenant_id,
+                "period": period,
+                "images_analyzed": 0,
+                "cost_usd": 0.0,
+                "grok_api_calls": 0,
+            }
+        return {
+            "tenant_id": tenant_id,
+            "period": period,
+            "images_analyzed": int(row["images_analyzed"]),
+            "cost_usd": float(row["cost_usd"]),
+            "grok_api_calls": int(row["grok_api_calls"]),
+            "updated_at": row["updated_at"],
+        }
+    finally:
+        close(con)
+
+
+def increment_tenant_usage(
+    tenant_id: str,
+    *,
+    images: int = 0,
+    cost_usd: float = 0.0,
+    grok_api_calls: int = 0,
+    period: str | None = None,
+) -> dict:
+    period = period or _usage_period()
+    with tx() as con:
+        con.execute(
+            """INSERT INTO tenant_usage (tenant_id, period, images_analyzed, cost_usd, grok_api_calls, updated_at)
+               VALUES (?, ?, ?, ?, ?, datetime('now'))
+               ON CONFLICT(tenant_id, period) DO UPDATE SET
+                 images_analyzed = images_analyzed + excluded.images_analyzed,
+                 cost_usd = cost_usd + excluded.cost_usd,
+                 grok_api_calls = grok_api_calls + excluded.grok_api_calls,
+                 updated_at = datetime('now')""",
+            (tenant_id, period, images, cost_usd, grok_api_calls),
+        )
+    return get_tenant_usage(tenant_id, period)
+
+
+def global_usage_totals(period: str | None = None) -> dict:
+    period = period or _usage_period()
+    con = connect()
+    try:
+        row = con.execute(
+            """SELECT COALESCE(SUM(images_analyzed), 0) AS images,
+                      COALESCE(SUM(cost_usd), 0) AS cost,
+                      COALESCE(SUM(grok_api_calls), 0) AS grok_calls
+               FROM tenant_usage WHERE period=?""",
+            (period,),
+        ).fetchone()
+        return {
+            "period": period,
+            "images_analyzed": int(row["images"]),
+            "cost_usd": float(row["cost"]),
+            "grok_api_calls": int(row["grok_calls"]),
         }
     finally:
         close(con)

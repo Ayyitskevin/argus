@@ -306,6 +306,7 @@ def analyze_image(
     image_path: str | Path,
     model: str | None = None,
     prefs: dict | None = None,
+    tenant: dict | None = None,
 ) -> AnalysisResult:
     """Run vision analysis on a single local image path. Returns typed AnalysisResult.
 
@@ -313,6 +314,60 @@ def analyze_image(
     Optional learned `prefs` nudge the result in either mode."""
     model = model or config.VISION_MODEL
     img_bytes, (width, height) = _prepare_image(image_path)
+
+    if config.SAAS_MODE:
+        from .auth_context import get_auth_context
+        from . import cloud_vision, metering
+        from .cloud_vision import CloudVisionError
+
+        ctx = get_auth_context()
+        tenant = tenant or (ctx.tenant if ctx else None)
+        tenant_id = tenant["id"] if tenant else (ctx.tenant_id if ctx else None)
+        provider = cloud_vision.resolve_provider(tenant)
+        try:
+            result, usage = cloud_vision.analyze_with_provider(
+                image_path,
+                provider=provider,
+                model=model,
+                prefs=prefs,
+            )
+            if usage.get("provider") == "grok":
+                metrics.record_grok_usage(
+                    {
+                        "prompt_tokens": usage.get("prompt_tokens", 0),
+                        "completion_tokens": usage.get("completion_tokens", 0),
+                        "total_tokens": usage.get("total_tokens", 0),
+                        "cost_usd": usage.get("cost_usd"),
+                    }
+                )
+            metering.record_usage(
+                tenant_id,
+                images=1,
+                cost_usd=usage.get("cost_usd"),
+                grok_api_calls=1 if usage.get("provider") == "grok" else 0,
+            )
+            return result
+        except CloudVisionError as exc:
+            log.error("cloud vision failed for %s: %s", image_path, exc)
+            err = str(exc)
+            return AnalysisResult(
+                image_path=str(image_path),
+                width=width,
+                height=height,
+                shot_type="other",
+                keywords=["analysis-failed"],
+                culling=Culling(
+                    keeper_score=0.3,
+                    hero_potential=0.3,
+                    technical_quality="unknown",
+                    notes=f"Error: {err}",
+                ),
+                alt_text="Image analysis unavailable.",
+                description="",
+                suggested_iptc={},
+                raw_response=err,
+                model=f"{provider}:{model}",
+            )
 
     if config.VISION_BACKEND == "mock":
         return _apply_prefs(_mock_result(image_path, width, height, model), prefs)
@@ -433,6 +488,7 @@ def analyze_folder(
     limit: int | None = None,
     prefs: dict | None = None,
     recursive: bool = False,
+    tenant: dict | None = None,
 ) -> list[AnalysisResult]:
     """Analyze supported images in a folder. Set recursive=True for nested galleries."""
     model = model or config.VISION_MODEL
@@ -443,7 +499,7 @@ def analyze_folder(
     results = []
     for img in images:
         try:
-            res = analyze_image(img, model=model, prefs=prefs)
+            res = analyze_image(img, model=model, prefs=prefs, tenant=tenant)
             results.append(res)
         except Exception as e:
             log.error("skipping %s: %s", img, e)

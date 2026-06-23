@@ -42,4 +42,9 @@ def vision_status() -> dict:
         "estimated_cost_per_image_usd": config.CLOUD_COST_PER_IMAGE,
         "grok_usage": grok_counters,
         "grok_cost_usd": snap["gauges"].get("grok_cost_usd", 0.0),
+        "saas_mode": config.SAAS_MODE,
+        "cloud_backend": config.CLOUD_BACKEND,
+        "default_vision_provider": config.DEFAULT_VISION_PROVIDER,
+        "cloud_cost_cap_usd": config.CLOUD_COST_CAP_USD or None,
+        "cloud_monthly_image_cap": config.CLOUD_MONTHLY_IMAGE_CAP or None,
     }

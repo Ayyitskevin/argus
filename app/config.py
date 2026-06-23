@@ -45,13 +45,26 @@ MAX_CONCURRENT_JOBS = int(os.environ.get("ARGUS_MAX_CONCURRENT_JOBS", "2"))
 MAX_QUEUE_DEPTH = int(os.environ.get("ARGUS_MAX_QUEUE_DEPTH", "100"))
 JOB_MAX_RETRIES = int(os.environ.get("ARGUS_JOB_MAX_RETRIES", "1"))
 JOB_RETENTION_DAYS = int(os.environ.get("ARGUS_JOB_RETENTION_DAYS", "90"))
-CLOUD_BACKEND = os.environ.get("ARGUS_CLOUD_BACKEND", "disabled").lower()  # disabled | stub | simulated (mock only)
+CLOUD_BACKEND = os.environ.get("ARGUS_CLOUD_BACKEND", "disabled").lower()  # disabled | stub | simulated | real
 COST_TRACKING = os.environ.get("ARGUS_COST_TRACKING", "true").lower() == "true"
 CLOUD_COST_PER_IMAGE = float(os.environ.get("ARGUS_CLOUD_COST_PER_IMAGE", "0.00123"))
 TAILSCALE_HINT = os.environ.get("ARGUS_TAILSCALE_HINT", "mickey")  # e.g. "mickey" or full tailscale name
 
 # Phase 4: optional bearer auth (disabled when unset — local dev default).
 API_TOKEN = os.environ.get("ARGUS_API_TOKEN") or None
+
+# Phase 10 — SaaS / multi-tenant cloud vision (off by default on homelab)
+SAAS_MODE = os.environ.get("ARGUS_SAAS_MODE", "false").lower() == "true"
+CLOUD_COST_CAP_USD = float(os.environ.get("ARGUS_CLOUD_COST_CAP_USD", "0"))  # 0 = unlimited global
+CLOUD_MONTHLY_IMAGE_CAP = int(os.environ.get("ARGUS_CLOUD_MONTHLY_IMAGE_CAP", "0"))  # 0 = unlimited global
+TENANT_KEY_PEPPER = os.environ.get("ARGUS_TENANT_KEY_PEPPER") or API_TOKEN or "argus-dev-pepper"
+DEFAULT_VISION_PROVIDER = os.environ.get("ARGUS_DEFAULT_VISION_PROVIDER", "grok").lower()
+
+# Optional alternate cloud vision providers (SaaS deploy only — not homelab default)
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY") or None
+OPENAI_VISION_MODEL = os.environ.get("OPENAI_VISION_MODEL", "gpt-4o")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY") or None
+ANTHROPIC_VISION_MODEL = os.environ.get("ANTHROPIC_VISION_MODEL", "claude-sonnet-4-20250514")
 
 # Phase 9: optional Prometheus text exposition
 PROMETHEUS_ENABLED = os.environ.get("ARGUS_PROMETHEUS_ENABLED", "false").lower() == "true"

@@ -18,7 +18,11 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
 
 from . import config, db, metrics, service
-from .auth import UI_TOKEN_COOKIE, require_bearer, verify_api_access
+from .auth import UI_TOKEN_COOKIE, require_admin, require_bearer, verify_api_access
+from .auth_context import AuthContext
+from . import metering, tenants
+from .metering import MeteringError
+from .tenants import TenantError
 from .callbacks import is_allowed_callback_url
 from .jobs import JobWorker
 from .sidecars import write_sidecar
@@ -93,7 +97,7 @@ async def lifespan(app: FastAPI):
         worker.stop()
 
 
-app = FastAPI(title="argus / photometa", version="phase9", lifespan=lifespan)
+app = FastAPI(title="argus / photometa", version="phase10", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -163,6 +167,10 @@ def healthz():
         "model": config.VISION_MODEL,
         "grok_configured": bool(config.XAI_API_KEY),
         "vision_provider": "xai" if config.VISION_BACKEND == "grok" else config.VISION_BACKEND,
+        "saas_mode": config.SAAS_MODE,
+        "cloud_cost_cap_usd": config.CLOUD_COST_CAP_USD or None,
+        "cloud_monthly_image_cap": config.CLOUD_MONTHLY_IMAGE_CAP or None,
+        "tenant_count": len(db.list_tenants(active_only=True)) if config.SAAS_MODE else 0,
     }
 
 
@@ -219,7 +227,7 @@ def home(request: Request):
     )
 
 
-@app.post("/analyze", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
+@app.post("/analyze", response_class=JSONResponse)
 async def analyze_single(
     file: Optional[UploadFile] = File(None),
     path: Optional[str] = Form(None),
@@ -227,6 +235,7 @@ async def analyze_single(
     write_sidecar: bool = Form(False),
     sidecar_dir: Optional[str] = Form(None),
     client_id: Optional[str] = Form(None),
+    ctx: AuthContext = Depends(require_bearer),
 ):
     if not file and not path:
         return error("provide file or local path", 400)
@@ -243,11 +252,15 @@ async def analyze_single(
             if not image_path.is_file():
                 return error(f"file not found: {path}", 404)
 
-        out = service.analyze_single_image(
-            image_path=image_path,
-            model=model,
-            client_id=client_id,
-        )
+        try:
+            out = service.analyze_single_image(
+                image_path=image_path,
+                model=model,
+                client_id=client_id,
+                tenant=ctx.tenant,
+            )
+        except service.AnalyzeError as exc:
+            return error(exc.message, exc.status_code)
         metrics.inc("analyze_single")
         metrics.inc("photos_analyzed")
         if write_sidecar:
@@ -262,7 +275,7 @@ async def analyze_single(
             tmp_path.unlink(missing_ok=True)
 
 
-@app.post("/analyze-folder", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
+@app.post("/analyze-folder", response_class=JSONResponse)
 def analyze_folder_endpoint(
     folder: Optional[str] = Form(None),
     model: Optional[str] = Form(None),
@@ -274,6 +287,7 @@ def analyze_folder_endpoint(
     client_id: Optional[str] = Form(None),
     recursive: bool = Form(False),
     callback_url: Optional[str] = Form(None),
+    ctx: AuthContext = Depends(require_bearer),
 ):
     try:
         result = service.perform_folder_analyze(
@@ -287,6 +301,7 @@ def analyze_folder_endpoint(
             client_id=client_id,
             recursive=recursive,
             callback_url=callback_url,
+            tenant=ctx.tenant,
         )
     except service.AnalyzeError as exc:
         return error(exc.message, exc.status_code)
@@ -305,7 +320,7 @@ def ui_analyze_folder(
     recursive: Optional[str] = Form(None),
     api_token: Optional[str] = Form(None),
 ):
-    verify_api_access(request, form_token=api_token)
+    ctx = verify_api_access(request, form_token=api_token)
     is_recursive = str(recursive or "").lower() in {"true", "1", "on", "yes"}
     try:
         result = service.perform_folder_analyze(
@@ -316,6 +331,7 @@ def ui_analyze_folder(
             sidecar_dir=sidecar_dir,
             client_id=client_id,
             recursive=is_recursive,
+            tenant=ctx.tenant,
         )
     except service.AnalyzeError as exc:
         return templates.TemplateResponse(
@@ -340,7 +356,7 @@ async def ui_analyze_single(
     client_id: Optional[str] = Form(None),
     api_token: Optional[str] = Form(None),
 ):
-    verify_api_access(request, form_token=api_token)
+    ctx = verify_api_access(request, form_token=api_token)
     if not file and not path:
         return templates.TemplateResponse(
             request,
@@ -366,11 +382,20 @@ async def ui_analyze_single(
                     status_code=404,
                 )
 
-        out = service.analyze_single_image(
-            image_path=image_path,
-            model=model,
-            client_id=client_id,
-        )
+        try:
+            out = service.analyze_single_image(
+                image_path=image_path,
+                model=model,
+                client_id=client_id,
+                tenant=ctx.tenant,
+            )
+        except service.AnalyzeError as exc:
+            return templates.TemplateResponse(
+                request,
+                "error.html",
+                _ui_context(title="Analyze failed", message=exc.message, status_code=exc.status_code),
+                status_code=exc.status_code,
+            )
         metrics.inc("analyze_single")
         metrics.inc("photos_analyzed")
         return RedirectResponse(f"/runs/{out['run_id']}", status_code=303)
@@ -838,6 +863,105 @@ def set_prefs(
     pref_id = db.set_preferences(client_id, prefs_dict, style)
     metrics.inc("preferences_writes")
     return {"ok": True, "id": pref_id, "client_id": client_id, "style": style, "prefs": prefs_dict}
+
+
+class TenantCreate(BaseModel):
+    id: str
+    name: str
+    vision_provider: str = "grok"
+    cost_cap_usd: float | None = None
+    monthly_image_cap: int | None = None
+
+
+class TenantPatch(BaseModel):
+    name: str | None = None
+    active: bool | None = None
+    vision_provider: str | None = None
+    cost_cap_usd: float | None = None
+    monthly_image_cap: int | None = None
+
+
+class TenantKeyCreate(BaseModel):
+    label: str | None = None
+
+
+@app.get("/saas/status", response_class=JSONResponse)
+def saas_status():
+    return {
+        "saas_mode": config.SAAS_MODE,
+        "cloud_backend": config.CLOUD_BACKEND,
+        "default_vision_provider": config.DEFAULT_VISION_PROVIDER,
+        "providers": ["grok", "openai", "anthropic"],
+        "metering": metering.usage_snapshot(),
+    }
+
+
+@app.get("/tenant/profile", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
+def tenant_profile(ctx: AuthContext = Depends(require_bearer)):
+    if not ctx.tenant:
+        return error("tenant API key required", 403)
+    return {"tenant": ctx.tenant}
+
+
+@app.get("/tenant/usage", response_class=JSONResponse, dependencies=[Depends(require_bearer)])
+def tenant_usage(ctx: AuthContext = Depends(require_bearer)):
+    if not ctx.tenant:
+        return error("tenant API key required", 403)
+    return metering.usage_snapshot(ctx.tenant_id)
+
+
+@app.get("/admin/tenants", response_class=JSONResponse, dependencies=[Depends(require_admin)])
+def admin_list_tenants(active_only: bool = Query(False)):
+    if not config.SAAS_MODE:
+        return error("ARGUS_SAAS_MODE is disabled", 404)
+    return {"tenants": db.list_tenants(active_only=active_only)}
+
+
+@app.post("/admin/tenants", response_class=JSONResponse, dependencies=[Depends(require_admin)])
+def admin_create_tenant(body: TenantCreate):
+    if not config.SAAS_MODE:
+        return error("ARGUS_SAAS_MODE is disabled", 404)
+    try:
+        tenant = tenants.create_tenant(
+            body.id,
+            name=body.name,
+            vision_provider=body.vision_provider,
+            cost_cap_usd=body.cost_cap_usd,
+            monthly_image_cap=body.monthly_image_cap,
+        )
+    except TenantError as exc:
+        return error(str(exc), 400)
+    return {"tenant": tenant}
+
+
+@app.patch("/admin/tenants/{tenant_id}", response_class=JSONResponse, dependencies=[Depends(require_admin)])
+def admin_patch_tenant(tenant_id: str, body: TenantPatch):
+    if not config.SAAS_MODE:
+        return error("ARGUS_SAAS_MODE is disabled", 404)
+    tenant = db.update_tenant(tenant_id, **body.model_dump(exclude_unset=True))
+    if not tenant:
+        return error("tenant not found", 404)
+    return {"tenant": tenant}
+
+
+@app.post("/admin/tenants/{tenant_id}/keys", response_class=JSONResponse, dependencies=[Depends(require_admin)])
+def admin_issue_tenant_key(tenant_id: str, body: TenantKeyCreate):
+    if not config.SAAS_MODE:
+        return error("ARGUS_SAAS_MODE is disabled", 404)
+    try:
+        issued = tenants.issue_api_key(tenant_id, label=body.label)
+    except TenantError as exc:
+        return error(str(exc), 400)
+    return issued
+
+
+@app.get("/admin/tenants/{tenant_id}/usage", response_class=JSONResponse, dependencies=[Depends(require_admin)])
+def admin_tenant_usage(tenant_id: str):
+    if not config.SAAS_MODE:
+        return error("ARGUS_SAAS_MODE is disabled", 404)
+    if not db.get_tenant(tenant_id):
+        return error("tenant not found", 404)
+    return metering.usage_snapshot(tenant_id)
 
 
 def cli_main():
