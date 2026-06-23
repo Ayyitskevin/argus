@@ -103,6 +103,9 @@ class JobWorker:
         if not config.QUEUE_ENABLED or self._thread is not None:
             return
         db.init()
+        stale = db.reconcile_stale_running_jobs(max_age_minutes=30)
+        if stale:
+            log.warning("Reconciled %s stale running job(s) on worker start", stale)
         self._thread = threading.Thread(target=self._loop, name="argus-job-worker", daemon=True)
         self._thread.start()
         log.info("Queue worker started")

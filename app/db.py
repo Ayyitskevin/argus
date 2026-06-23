@@ -469,6 +469,69 @@ def cleanup_old_jobs(days: int | None = None) -> None:
         )
 
 
+def reconcile_stale_running_jobs(
+    *,
+    max_age_minutes: int | None = None,
+    new_status: str = "failed",
+    error: str = "stale: worker lost (process restart or crash)",
+) -> int:
+    """Mark orphaned ``running`` jobs terminal so the queue can drain cleanly."""
+    if new_status not in {"failed", "dead_letter", "queued"}:
+        raise ValueError(f"unsupported new_status: {new_status}")
+
+    sql = "SELECT id FROM jobs WHERE status='running'"
+    params: list = []
+    if max_age_minutes is not None:
+        sql += " AND updated_at < datetime('now', ?)"
+        params.append(f"-{int(max_age_minutes)} minutes")
+
+    con = connect()
+    try:
+        rows = con.execute(sql, params).fetchall()
+    finally:
+        close(con)
+
+    count = 0
+    for row in rows:
+        update_job(
+            row["id"],
+            status=new_status,
+            error=error if new_status != "queued" else None,
+        )
+        count += 1
+    return count
+
+
+def purge_jobs(
+    *,
+    statuses: tuple[str, ...] | None = None,
+    folder_prefixes: tuple[str, ...] | None = None,
+) -> int:
+    """Delete jobs matching optional status and/or ephemeral folder prefixes."""
+    clauses: list[str] = []
+    params: list = []
+
+    if statuses:
+        placeholders = ", ".join("?" for _ in statuses)
+        clauses.append(f"status IN ({placeholders})")
+        params.extend(statuses)
+
+    if folder_prefixes:
+        prefix_clauses = []
+        for prefix in folder_prefixes:
+            prefix_clauses.append("folder LIKE ?")
+            params.append(f"{prefix}%")
+        clauses.append("(" + " OR ".join(prefix_clauses) + ")")
+
+    if not clauses:
+        return 0
+
+    where = " AND ".join(clauses)
+    with tx() as con:
+        cur = con.execute(f"DELETE FROM jobs WHERE {where}", params)
+        return int(cur.rowcount)
+
+
 def get_preferences(client_id: Optional[str] = None, style: Optional[str] = None) -> dict:
     con = connect()
     try:
