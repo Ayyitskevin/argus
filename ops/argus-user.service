@@ -1,0 +1,18 @@
+# User-level Argus unit (no sudo). Install: scripts/install-user-service.sh
+[Unit]
+Description=Argus photometa service (user)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/ai-workspace/argus
+EnvironmentFile=-%h/ai-workspace/argus/.env
+Environment=ARGUS_HOST=0.0.0.0
+Environment=ARGUS_PORT=8010
+Environment=ARGUS_QUEUE_ENABLED=true
+ExecStart=%h/ai-workspace/argus/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8010
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,12 @@
+[Unit]
+Description=Argus SQLite backup (user nightly snapshot)
+After=network.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/ai-workspace/argus/.env
+ExecStart=%h/ai-workspace/argus/scripts/backup-db.sh
+Nice=10
+
+[Install]
+WantedBy=default.target

@@ -16,13 +16,23 @@ if [[ ! -f "$DB" ]]; then
   exit 1
 fi
 
-if ! command -v sqlite3 >/dev/null; then
-  echo "sqlite3 required for online backup" >&2
-  exit 1
-fi
-
 mkdir -p "$BACKUP_DIR"
-sqlite3 "$DB" ".backup '$OUT'"
+if command -v sqlite3 >/dev/null; then
+  sqlite3 "$DB" ".backup '$OUT'"
+else
+  PYTHON="${ARGUS_PYTHON:-$ROOT/.venv/bin/python}"
+  if [[ ! -x "$PYTHON" ]]; then
+    PYTHON=python3
+  fi
+  "$PYTHON" - "$DB" "$OUT" <<'PY'
+import shutil
+import sqlite3
+import sys
+src, dest = sys.argv[1], sys.argv[2]
+with sqlite3.connect(f"file:{src}?mode=ro", uri=True) as s, sqlite3.connect(dest) as d:
+    s.backup(d)
+PY
+fi
 BYTES="$(wc -c < "$OUT" | tr -d ' ')"
 echo "Backup written: $OUT (${BYTES} bytes)"
 

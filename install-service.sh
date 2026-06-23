@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install or refresh argus systemd unit on mickey (or any Linux host).
+# Install or refresh argus systemd unit on mickey (requires sudo).
+# No sudo? Use: scripts/install-user-service.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"

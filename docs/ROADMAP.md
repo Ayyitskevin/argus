@@ -1,8 +1,9 @@
 # Argus Roadmap — Phases 5+
 
 > **As of:** 2026-06-23 · `main` @ Phase 11 (SaaS portal, admin CRUD, ops batch)
-> Phases 0–11 are shipped in code; homelab runs mock on :8010, SaaS on :8020.
-> This doc tracks what remains for production hardening and fleet depth.
+> Phases 0–11 shipped in code. Homelab :8010 runs **grok** (vision gated on xAI credits);
+> mock for CI/dev. SaaS on :8020.
+> This doc tracks **proof/ops** remaining — most slices are implemented.
 
 ## North star
 
@@ -101,9 +102,9 @@ on real edited galleries.
    - Optional: per-`client_id` style suffix from prefs (`style: f_and_b`)
 
 4. **Definition of done**
-   - [ ] Kevin reaction: "keywords/culling would save real time"
-   - [ ] `/healthz` green on mickey tailnet
-   - [ ] Zero accidental model loads during mock dev/CI
+   - [ ] Kevin reaction: "keywords/culling would save real time" — **blocked: xAI credits**
+   - [x] `/healthz` green on mickey tailnet (user systemd `argus.service`)
+   - [x] Zero accidental model loads during mock dev/CI
 
 ---
 
@@ -129,8 +130,9 @@ on real edited galleries.
    - Settings integration tile (like Hermes reminders)
 
 4. **Definition of done**
-   - [ ] Publish test gallery → argus job queued → run visible in mise admin
-   - [ ] Mock-only CI for the wiring; one live proof on flow
+   - [x] Publish test gallery → argus job queued → run visible in mise admin (gallery 1, run 199, HTTPS callback)
+   - [x] Mock-only CI for the wiring; one live proof on flow (`scripts/dogfood_mise_loop.py`)
+   - [x] `scripts/sync-mise-media.sh` — rsync flow originals → `ARGUS_MISE_MEDIA_ROOT`
 
 ---
 
@@ -154,8 +156,8 @@ on real edited galleries.
    - `GET /runs/compare?a=&b=` — diff photo counts / score drift (re-analyze)
 
 4. **Definition of done**
-   - [ ] Kevin can cull a 50-image run in UI faster than Finder + spreadsheet
-   - [ ] One corrected keyword appears in next analyze via prefs
+   - [ ] Kevin can cull a 50-image run in UI faster than Finder + spreadsheet (UI shipped; timing proof pending)
+   - [ ] One corrected keyword appears in next analyze via prefs (needs real Grok re-analyze)
 
 ---
 
@@ -182,14 +184,18 @@ on real edited galleries.
    - Enables mise/mnemosyne to avoid poll loops
 
 5. **Definition of done**
-   - [ ] One real LR export → sidecars appear next to files
-   - [ ] Manifest consumed by lightroom_export_stub without hand edits
+   - [x] One real LR export → sidecars appear next to files (run 198, `.xmp`/`.argus.json`/`.iptc.json`)
+   - [x] Manifest consumed by lightroom_export_stub without hand edits
 
 ---
 
 ## Phase 9 — Fleet ops hardening
 
 **Goal:** Safe to leave running on mickey 24/7 beside Odysseus/Ollama.
+
+**Homelab status (2026-06-23):** user systemd `argus.service` + `argus-backup.timer`
+(`scripts/install-user-service.sh`). System-wide unit still needs sudo. Enable linger:
+`sudo loginctl enable-linger $USER`.
 
 ### Slices
 
