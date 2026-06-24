@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, Response
 from . import config
 from .auth import resolve_auth
 from .auth_context import AuthContext
+from .client_ip import client_ip
 
 log = logging.getLogger("argus.rate_limit")
 
@@ -29,11 +30,7 @@ def _client_key(request: Request, ctx: AuthContext | None) -> str:
         return f"tenant:{ctx.tenant_id}"
     if ctx and ctx.is_admin:
         return "admin"
-    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-    if forwarded:
-        return f"ip:{forwarded}"
-    host = request.client.host if request.client else "unknown"
-    return f"ip:{host}"
+    return f"ip:{client_ip(request)}"
 
 
 def _limit_for(request: Request) -> int:

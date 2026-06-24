@@ -85,6 +85,11 @@ S3_PREFIX = os.environ.get("ARGUS_S3_PREFIX", "argus/tenants")
 RATE_LIMIT_ENABLED = os.environ.get("ARGUS_RATE_LIMIT_ENABLED", "true").lower() == "true"
 RATE_LIMIT_PER_MINUTE = int(os.environ.get("ARGUS_RATE_LIMIT_PER_MINUTE", "60"))
 RATE_LIMIT_ANALYZE_PER_MINUTE = int(os.environ.get("ARGUS_RATE_LIMIT_ANALYZE_PER_MINUTE", "20"))
+# Which proxy header (if any) to trust for the real client IP. Empty = trust none
+# and use the socket peer, so a client can't forge X-Forwarded-For to dodge per-IP
+# limits or spoof the audit trail. Set to "cloudflare" (CF-Connecting-IP) or "xff"
+# (first X-Forwarded-For hop) ONLY when Argus genuinely sits behind that proxy.
+RATE_LIMIT_TRUSTED_PROXY = os.environ.get("ARGUS_RATE_LIMIT_TRUSTED_PROXY", "").strip().lower()
 REDIS_URL = os.environ.get("ARGUS_REDIS_URL") or None
 
 CORS_ORIGINS = [

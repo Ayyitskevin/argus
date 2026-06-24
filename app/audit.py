@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import Request
 
 from . import config, db
+from .client_ip import client_ip
 
 log = logging.getLogger("argus.audit")
 
@@ -24,12 +25,7 @@ def _actor_label(ctx) -> str | None:
 def _client_ip(request: Request | None) -> str | None:
     if request is None:
         return None
-    forwarded = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-    if forwarded:
-        return forwarded
-    if request.client:
-        return request.client.host
-    return None
+    return client_ip(request)
 
 
 def record(
