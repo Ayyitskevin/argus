@@ -91,13 +91,14 @@ def create_share_link(
     else:
         path = "/storefront/share-links"
     body = urllib.parse.urlencode(fields).encode()
+    token = config.PLUTUS_ADMIN_TOKEN if config.PLUTUS_TENANT_ID else config.PLUTUS_TOKEN
     req = urllib.request.Request(
         f"{config.PLUTUS_URL}{path}",
         method="POST",
         data=body,
         headers={
             "Content-Type": "application/x-www-form-urlencoded",
-            "Authorization": f"Bearer {config.PLUTUS_TOKEN}",
+            "Authorization": f"Bearer {token}",
         },
     )
     try:
@@ -142,7 +143,12 @@ def handoff_async(mise_gallery_id: int, argus_run_id: int) -> None:
                 len(result.get("bundles") or []),
             )
             if run_id:
-                mise_client.plutus_callback(mise_gallery_id, run_id=run_id, status="done")
+                mise_client.plutus_callback(
+                    mise_gallery_id,
+                    run_id=run_id,
+                    status="done",
+                    offer_url=result.get("offer_url"),
+                )
         except PlutusClientError as exc:
             log.warning("plutus handoff failed gallery %s: %s", mise_gallery_id, exc)
             mise_client.plutus_callback(mise_gallery_id, status="error", error=str(exc))

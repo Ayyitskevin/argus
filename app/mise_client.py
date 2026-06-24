@@ -73,6 +73,7 @@ def plutus_callback(
     run_id: int | None = None,
     status: str = "done",
     error: str | None = None,
+    offer_url: str | None = None,
 ) -> None:
     """Best-effort write-back so pipeline dashboard shows plutus_last_*."""
     if not is_enabled():
@@ -83,6 +84,8 @@ def plutus_callback(
         payload["run_id"] = run_id
     if error:
         payload["error"] = error
+    if offer_url:
+        payload["offer_url"] = offer_url
     try:
         with httpx.Client(timeout=config.MISE_TIMEOUT) as client:
             resp = client.post(

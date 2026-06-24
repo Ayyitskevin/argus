@@ -173,6 +173,7 @@ def run_all(gallery_id: int, *, vision_limit: int | None = None) -> dict[str, An
         steps.append(f"vision skipped (run {argus_run_id})")
 
     plutus_run_id: int | None = None
+    auto_offer_url: str | None = None
     if vision_ran:
         plutus_run_id = _wait_mise_plutus(gallery_id)
 
@@ -190,23 +191,39 @@ def run_all(gallery_id: int, *, vision_limit: int | None = None) -> dict[str, An
                 mise_client.plutus_callback(gallery_id, status="error", error=str(exc))
                 raise PipelineError(str(exc)) from exc
             plutus_run_id = int(plutus_result["run_id"])
-            mise_client.plutus_callback(gallery_id, run_id=plutus_run_id, status="done")
+            auto_offer_url = plutus_result.get("offer_url") or None
+            mise_client.plutus_callback(
+                gallery_id,
+                run_id=plutus_run_id,
+                status="done",
+                offer_url=auto_offer_url,
+            )
             bundle_n = len(plutus_result.get("bundles") or [])
             steps.append(f"upsell run {plutus_run_id} ({bundle_n} bundles)")
     else:
         steps.append(f"upsell run {plutus_run_id} (auto)")
 
     label = (gallery_handoff(gallery_id) or {}).get("title") or f"Gallery {gallery_id}"
-    try:
-        link = plutus_client.create_share_link(plutus_run_id, label=label)
-    except plutus_client.PlutusClientError as exc:
-        raise PipelineError(str(exc)) from exc
+    if auto_offer_url:
+        offer_url = auto_offer_url
+    else:
+        try:
+            link = plutus_client.create_share_link(plutus_run_id, label=label)
+            offer_url = link["public_url"]
+        except plutus_client.PlutusClientError as exc:
+            raise PipelineError(str(exc)) from exc
     steps.append("offer link ready")
+    mise_client.plutus_callback(
+        gallery_id,
+        run_id=plutus_run_id,
+        status="done",
+        offer_url=offer_url,
+    )
 
     return {
         "gallery_id": gallery_id,
         "argus_run_id": argus_run_id,
         "plutus_run_id": plutus_run_id,
-        "offer_url": link["public_url"],
+        "offer_url": offer_url,
         "steps": steps,
     }

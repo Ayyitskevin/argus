@@ -70,6 +70,44 @@ def test_ui_pipeline_requires_homelab(monkeypatch):
     assert r.status_code == 303
 
 
+def test_run_all_uses_auto_offer_from_recommend(monkeypatch):
+    monkeypatch.setattr(config, "MISE_URL", "http://flow:8400")
+    monkeypatch.setattr(config, "MISE_API_TOKEN", "secret")
+    monkeypatch.setattr(config, "PLUTUS_URL", "http://plutus:8031")
+    monkeypatch.setattr(config, "PLUTUS_TOKEN", "hook")
+    payload = {
+        "galleries": [
+            {
+                "id": 1,
+                "title": "Tasting",
+                "published": True,
+                "argus_last_run_id": 9,
+                "argus_last_status": "done",
+                "plutus_last_run_id": None,
+                "plutus_last_status": None,
+            }
+        ]
+    }
+    with patch("app.mise_client.httpx.Client") as mock_client:
+        inst = mock_client.return_value.__enter__.return_value
+        inst.get.return_value.status_code = 200
+        inst.get.return_value.json.return_value = payload
+        with patch(
+            "app.plutus_client.recommend_mise_gallery",
+            return_value={
+                "run_id": 42,
+                "bundles": [{}],
+                "offer_url": "https://plutus:8031/store/flow/offer/auto",
+            },
+        ):
+            with patch("app.mise_client.plutus_callback"):
+                with patch("app.plutus_client.create_share_link") as share:
+                    result = pipeline.run_all(1)
+    share.assert_not_called()
+    assert result["offer_url"] == "https://plutus:8031/store/flow/offer/auto"
+    assert result["plutus_run_id"] == 42
+
+
 def test_run_all_skips_completed_steps(monkeypatch):
     monkeypatch.setattr(config, "MISE_URL", "http://flow:8400")
     monkeypatch.setattr(config, "MISE_API_TOKEN", "secret")
@@ -92,9 +130,10 @@ def test_run_all_skips_completed_steps(monkeypatch):
         inst = mock_client.return_value.__enter__.return_value
         inst.get.return_value.status_code = 200
         inst.get.return_value.json.return_value = payload
-        with patch("app.plutus_client.create_share_link") as share:
-            share.return_value = {"public_url": "http://plutus:8030/store/studio/offer/tok"}
-            result = pipeline.run_all(1)
+        with patch("app.mise_client.plutus_callback"):
+            with patch("app.plutus_client.create_share_link") as share:
+                share.return_value = {"public_url": "http://plutus:8030/store/studio/offer/tok"}
+                result = pipeline.run_all(1)
     assert result["argus_run_id"] == 9
     assert result["plutus_run_id"] == 6
     assert result["offer_url"].endswith("/offer/tok")
