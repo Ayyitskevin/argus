@@ -85,9 +85,14 @@ def create_share_link(
     fields: dict[str, str] = {"run_id": str(run_id)}
     if label:
         fields["label"] = label
+    if config.PLUTUS_TENANT_ID:
+        fields["tenant_id"] = config.PLUTUS_TENANT_ID
+        path = "/integrations/offer"
+    else:
+        path = "/storefront/share-links"
     body = urllib.parse.urlencode(fields).encode()
     req = urllib.request.Request(
-        f"{config.PLUTUS_URL}/storefront/share-links",
+        f"{config.PLUTUS_URL}{path}",
         method="POST",
         data=body,
         headers={

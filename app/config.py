@@ -146,6 +146,7 @@ MISE_TIMEOUT = int(os.environ.get("ARGUS_MISE_TIMEOUT", "10"))
 # Homelab: Plutus upsell hand-off after Mise gallery analyze (:8030).
 PLUTUS_URL = os.environ.get("ARGUS_PLUTUS_URL", "").rstrip("/")
 PLUTUS_TOKEN = os.environ.get("ARGUS_PLUTUS_TOKEN", "")
+PLUTUS_TENANT_ID = os.environ.get("ARGUS_PLUTUS_TENANT_ID") or None
 PLUTUS_TIMEOUT = int(os.environ.get("ARGUS_PLUTUS_TIMEOUT", "60"))
 
 # Phase 11 hardening — in SaaS mode, folder/path analysis is confined to these

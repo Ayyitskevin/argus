@@ -112,3 +112,35 @@ def test_create_share_link_posts(monkeypatch):
     assert link["public_url"].endswith("/offer/tok1")
     assert "run_id=6" in captured["body"]
     assert "label=Wedding" in captured["body"]
+    assert captured["url"].endswith("/storefront/share-links")
+
+
+def test_create_share_link_uses_integrations_when_tenant_set(monkeypatch):
+    monkeypatch.setattr(config, "PLUTUS_URL", "http://plutus:8031")
+    monkeypatch.setattr(config, "PLUTUS_TOKEN", "admin-secret")
+    monkeypatch.setattr(config, "PLUTUS_TENANT_ID", "flow-studio")
+    captured: dict = {}
+
+    class _Resp:
+        def read(self):
+            return json.dumps(
+                {"public_url": "http://plutus:8031/store/studio/offer/tok2"}
+            ).encode()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(req, timeout=60):
+        captured["url"] = req.full_url
+        captured["body"] = req.data.decode()
+        return _Resp()
+
+    with patch("app.plutus_client.urllib.request.urlopen", fake_urlopen):
+        link = plutus_client.create_share_link(7, label="Album")
+
+    assert link["public_url"].endswith("/offer/tok2")
+    assert captured["url"].endswith("/integrations/offer")
+    assert "tenant_id=flow-studio" in captured["body"]
