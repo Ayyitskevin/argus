@@ -321,6 +321,45 @@ def limit_for_storage(effective: int | None) -> int:
     return effective if effective is not None else 0
 
 
+def analyze_folder_estimate(
+    folder: Path,
+    *,
+    limit: int | None = None,
+    mise: bool = False,
+    recursive: bool = False,
+) -> dict[str, Any]:
+    """Preflight image count and optional Grok cost estimate for homelab budgets."""
+    effective_limit = resolve_analyze_limit(limit, mise=mise)
+    images = _folder_image_list(folder, limit=effective_limit, recursive=recursive)
+    count = len(images)
+    estimate: dict[str, Any] = {
+        "image_count": count,
+        "analyze_all": effective_limit is None,
+        "limit": limit_for_storage(effective_limit),
+    }
+    if config.VISION_BACKEND == "grok" and count > 0:
+        from .xai_budget import today_snapshot
+
+        cost_per = float(config.XAI_ESTIMATED_COST_PER_IMAGE)
+        budget = today_snapshot()
+        estimated_cost = round(count * cost_per, 4)
+        estimate["estimated_cost_usd"] = estimated_cost
+        estimate["cost_per_image_usd"] = cost_per
+        estimate["budget"] = budget
+        if budget.get("enabled") and budget.get("remaining_usd") is not None:
+            estimate["budget_ok"] = estimated_cost <= float(budget["remaining_usd"])
+    return estimate
+
+
+def _photos_for_run(run_id: int) -> list[dict]:
+    photos: list[dict] = []
+    for row in db.get_photos_for_run(run_id):
+        photo = db.get_photo_for_run(run_id, row["id"])
+        if photo:
+            photos.append(photo)
+    return photos
+
+
 def _folder_image_list(folder: Path, *, limit: int | None, recursive: bool) -> list[Path]:
     images = vision.collect_folder_images(folder, recursive=recursive)
     if limit is not None and limit > 0:
@@ -452,24 +491,61 @@ def _analyze_folder_incremental(
     job_id: str,
 ) -> dict:
     """Analyze one image at a time so queued jobs expose live progress."""
+    import os
+
     prefs = load_preferences(client_id)
-    run_id = db.create_run(
-        source=source,
-        model=model,
-        project_id=project_id,
-        tenant_id=tenant_id,
-    )
+    job_row = db.get_job(job_id, tenant_id=db.GLOBAL_SCOPE) or {}
+    existing_run_id = job_row.get("run_id")
+    done_basenames: set[str] = set()
+    if existing_run_id:
+        for row in db.get_photos_for_run(int(existing_run_id)):
+            done_basenames.add(os.path.basename(str(row["image_path"])).lower())
+
+    pending = [path for path in images if path.name.lower() not in done_basenames]
     total = len(images)
-    db.update_job_progress(job_id, done=0, total=total, run_id=run_id)
+    done_count = len(done_basenames)
+
+    if existing_run_id and not pending:
+        photos = _photos_for_run(int(existing_run_id))
+        return _folder_run_metadata(
+            {
+                "run_id": int(existing_run_id),
+                "source": source,
+                "model": model,
+                "count": len(photos),
+                "photos": photos,
+                "sidecars_written": [],
+                "resumed": True,
+            },
+            failed_count=0,
+            project_id=project_id,
+            client_id=client_id,
+            recursive=recursive,
+        )
+
+    if existing_run_id:
+        run_id = int(existing_run_id)
+    else:
+        run_id = db.create_run(
+            source=source,
+            model=model,
+            project_id=project_id,
+            tenant_id=tenant_id,
+        )
+
+    db.update_job_progress(job_id, done=done_count, total=total, run_id=run_id)
 
     analyses: list = []
     photos: list[dict] = []
     sidecars_written: list[str] = []
 
-    for index, image_path in enumerate(images):
+    if existing_run_id:
+        photos.extend(_photos_for_run(run_id))
+
+    for index, image_path in enumerate(pending):
         db.update_job_progress(
             job_id,
-            done=index,
+            done=done_count + index,
             total=total,
             run_id=run_id,
             current_file=image_path.name,
@@ -494,7 +570,7 @@ def _analyze_folder_incremental(
         db.set_run_photo_count(run_id, len(photos))
         db.update_job_progress(
             job_id,
-            done=index + 1,
+            done=done_count + index + 1,
             total=total,
             run_id=run_id,
             current_file=image_path.name,
@@ -760,6 +836,12 @@ def perform_folder_analyze(
     model_name = model or config.VISION_MODEL
     effective_limit = resolve_analyze_limit(limit, mise=mise_gallery_id is not None)
     stored_limit = limit_for_storage(effective_limit)
+    estimate = analyze_folder_estimate(
+        path,
+        limit=limit,
+        mise=mise_gallery_id is not None,
+        recursive=recursive,
+    )
 
     if config.QUEUE_ENABLED:
         ok, reason = queue_accepting_jobs()
@@ -789,6 +871,7 @@ def perform_folder_analyze(
             "recursive": recursive,
             "limit": stored_limit,
             "analyze_all": effective_limit is None,
+            "estimate": estimate,
         }
         if callback_url:
             out["callback_url"] = callback_url
@@ -822,6 +905,7 @@ def perform_folder_analyze(
     elif sidecar_dir:
         result["sidecar_dir"] = sidecar_dir
     result["mode"] = "sync"
+    result["estimate"] = estimate
     if mise_gallery_id is not None and result.get("run_id"):
         mise_dedup.record_done(mise_gallery_id, client_id, int(result["run_id"]))
     if result.get("run_id"):

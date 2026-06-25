@@ -1146,10 +1146,18 @@ def export_run(run_id: int, ctx: AuthContext = Depends(require_bearer)):
 
 
 @app.get("/runs/{run_id}/export.csv")
-def export_run_csv(run_id: int, ctx: AuthContext = Depends(require_bearer)):
+def export_run_csv(
+    run_id: int,
+    min_keeper: Optional[float] = Query(None, ge=0.0, le=1.0),
+    ctx: AuthContext = Depends(require_bearer),
+):
     data = get_full_run_for_ctx(run_id, ctx)
     if not data:
         return error("run not found", 404)
+
+    photos = data.get("photos") or []
+    if min_keeper is not None:
+        photos = service.sort_and_filter_photos(photos, min_keeper=min_keeper)
 
     output = io.StringIO()
     writer = csv.DictWriter(
@@ -1167,7 +1175,7 @@ def export_run_csv(run_id: int, ctx: AuthContext = Depends(require_bearer)):
         ],
     )
     writer.writeheader()
-    for photo in data.get("photos", []):
+    for photo in photos:
         culling = photo.get("culling", {}) or {}
         writer.writerow(
             {
