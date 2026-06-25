@@ -117,3 +117,33 @@ def test_bearer_cookie_works_on_api_route(sample_image, auth_on):
     folder = str(Path(sample_image).parent)
     r = client.post("/analyze-folder", data={"folder": folder, "limit": 1})
     assert r.status_code == 200, r.text
+
+
+def test_ui_clients_list_renders():
+    db.set_preferences("ui-client-a", {"style": "f_and_b", "keyword_boosts": ["heritage"]})
+    r = client.get("/ui/clients")
+    assert r.status_code == 200
+    assert "ui-client-a" in r.text
+    assert "f_and_b" in r.text
+    assert "heritage" in r.text
+
+
+def test_ui_client_prefs_save_roundtrip():
+    client_id = "ui-prefs-save"
+    r = client.post(
+        f"/ui/clients/{client_id}",
+        data={
+            "style": "events",
+            "shot_type_preference": "candid_moment",
+            "culling_bias": "0.1",
+            "keyword_boosts": "toast\nchampagne",
+        },
+        follow_redirects=False,
+    )
+    assert r.status_code == 303
+    assert r.headers["location"].endswith("?saved=1")
+    prefs = db.get_preferences(client_id, tenant_id=db.GLOBAL_SCOPE)
+    assert prefs.get("style") == "events"
+    assert prefs.get("shot_type_preference") == "candid_moment"
+    assert prefs.get("culling_bias") == pytest.approx(0.1)
+    assert prefs.get("keyword_boosts") == ["toast", "champagne"]

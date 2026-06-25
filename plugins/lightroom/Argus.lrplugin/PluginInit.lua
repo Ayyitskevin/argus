@@ -86,7 +86,7 @@ return {
         prefs.base_url = propertyTable.base_url
         prefs.api_token = propertyTable.api_token
         prefs.client_id = propertyTable.client_id
-        prefs.limit = tonumber(propertyTable.limit) or 20
+        prefs.limit = tonumber(propertyTable.limit) or 0
         prefs.recursive = propertyTable.recursive
     end,
 }

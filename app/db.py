@@ -226,6 +226,7 @@ def _apply_schema(con: sqlite3.Connection) -> None:
         ("tenants", "plan_tier", "TEXT"),
         ("tenants", "cost_cap_micro_usd", "INTEGER"),
         ("tenant_usage", "cost_micro_usd", "INTEGER NOT NULL DEFAULT 0"),
+        ("mise_analyze_ledger", "folder_fingerprint", "TEXT"),
     ]:
         try:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {typ}")
@@ -1363,16 +1364,63 @@ def upsert_mise_analyze_ledger(
     status: str,
     run_id: int | None = None,
     job_id: str | None = None,
+    folder_fingerprint: str | None = None,
 ) -> None:
     with tx() as con:
         con.execute(
             """INSERT INTO mise_analyze_ledger
-               (dedup_key, mise_gallery_id, client_id, run_id, job_id, status, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+               (dedup_key, mise_gallery_id, client_id, run_id, job_id, status,
+                folder_fingerprint, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
                ON CONFLICT(dedup_key) DO UPDATE SET
                  run_id=COALESCE(excluded.run_id, mise_analyze_ledger.run_id),
                  job_id=COALESCE(excluded.job_id, mise_analyze_ledger.job_id),
                  status=excluded.status,
+                 folder_fingerprint=COALESCE(
+                     excluded.folder_fingerprint, mise_analyze_ledger.folder_fingerprint
+                 ),
                  updated_at=datetime('now')""",
-            (dedup_key, mise_gallery_id, client_id, run_id, job_id, status),
+            (dedup_key, mise_gallery_id, client_id, run_id, job_id, status, folder_fingerprint),
         )
+
+
+def list_preference_clients(*, tenant_id: str | None = None) -> list[dict]:
+    """Distinct client_ids with their latest preference row (homelab UI)."""
+    tenant_id = _resolve_tenant_scope(tenant_id)
+    con = connect()
+    try:
+        if tenant_id:
+            rows = con.execute(
+                """SELECT client_id, style, prefs, updated_at FROM preferences
+                   WHERE tenant_id=? AND client_id IS NOT NULL AND client_id != ''
+                   ORDER BY updated_at DESC""",
+                (tenant_id,),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                """SELECT client_id, style, prefs, updated_at FROM preferences
+                   WHERE client_id IS NOT NULL AND client_id != ''
+                   ORDER BY updated_at DESC"""
+            ).fetchall()
+        seen: set[str] = set()
+        out: list[dict] = []
+        for row in rows:
+            cid = row["client_id"]
+            if cid in seen:
+                continue
+            seen.add(cid)
+            prefs = _json_or(row["prefs"], {})
+            boosts = prefs.get("keyword_boosts") or []
+            out.append(
+                {
+                    "client_id": cid,
+                    "style": row["style"] or prefs.get("style"),
+                    "updated_at": row["updated_at"],
+                    "keyword_boosts": boosts[:5],
+                    "shot_type_preference": prefs.get("shot_type_preference"),
+                    "culling_bias": prefs.get("culling_bias"),
+                }
+            )
+        return out
+    finally:
+        close(con)

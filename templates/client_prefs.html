@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:.75rem">
+    <div>
+      <h2 style="margin:0 0 .35rem 0">{{ client_id }}</h2>
+      <p class="small" style="margin:0">Vision prompts and culling nudges for this client slug.</p>
+    </div>
+    <div class="nav">
+      <a href="/ui/clients">← All clients</a> · <a href="/">Home</a>
+    </div>
+  </div>
+  {% if saved %}<p class="status-ok" style="margin:.75rem 0 0">Preferences saved.</p>{% endif %}
+</div>
+
+<div class="card">
+  <form action="/ui/clients/{{ client_id }}" method="post">
+    <div class="toolbar" style="flex-wrap:wrap; align-items:flex-end">
+      <label>
+        <span>Style</span>
+        <select name="style">
+          {% for st in styles %}
+          <option value="{{ st }}" {% if style == st %}selected{% endif %}>
+            {{ st or '(none)' }}
+          </option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Shot type preference</span>
+        <select name="shot_type_preference">
+          <option value="">(none)</option>
+          {% for st in shot_types %}
+          <option value="{{ st }}" {% if shot_type_preference == st %}selected{% endif %}>{{ st }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Culling bias</span>
+        <input type="number" name="culling_bias" value="{{ culling_bias }}" min="-0.5" max="0.5" step="0.05" style="width:90px">
+      </label>
+    </div>
+    <label style="display:block; margin-top:1rem">
+      <span>Keyword boosts (one per line, highest priority first)</span>
+      <textarea name="keyword_boosts" rows="5" style="width:100%; font-family:inherit">{{ keyword_boosts_text }}</textarea>
+    </label>
+    {% if auth_required %}
+    <div class="small" style="margin-top:.5rem">API token:
+      <input type="password" name="api_token" style="width:200px; margin-left:.35rem" placeholder="Bearer token">
+    </div>
+    {% endif %}
+    <div style="margin-top:1rem">
+      <button type="submit">Save preferences</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

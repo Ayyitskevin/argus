@@ -9,7 +9,7 @@ def build_analyze_folder_form(
     *,
     folder: Optional[str],
     model: Optional[str],
-    limit: int,
+    limit: int | None,
     write_sidecars: bool,
     sidecar_dir: Optional[str],
     mise_gallery_id: Optional[int],
@@ -19,9 +19,10 @@ def build_analyze_folder_form(
     callback_url: Optional[str],
 ) -> dict[str, str]:
     data: dict[str, str] = {
-        "limit": str(limit),
         "write_sidecars": str(write_sidecars).lower(),
     }
+    if limit is not None:
+        data["limit"] = str(limit)
     if folder:
         data["folder"] = folder
     if model:
@@ -44,7 +45,7 @@ def build_analyze_folder_form(
 def build_job_payload(
     *,
     folder: str,
-    limit: int,
+    limit: int | None,
     write_sidecars: bool,
     sidecar_dir: Optional[str],
     client_id: Optional[str],
@@ -54,10 +55,11 @@ def build_job_payload(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "folder": folder,
-        "limit": limit,
         "write_sidecars": write_sidecars,
         "recursive": recursive,
     }
+    if limit is not None:
+        payload["limit"] = limit
     if sidecar_dir:
         payload["sidecar_dir"] = sidecar_dir
     if client_id:

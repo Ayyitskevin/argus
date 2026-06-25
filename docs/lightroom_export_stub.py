@@ -3,7 +3,10 @@
 
 Usage (mock-safe):
     ARGUS_VISION_BACKEND=mock python docs/lightroom_export_stub.py /path/to/gallery \\
-        --base-url http://mickey:8010 --client-id kevin --limit 10
+        --base-url http://mickey:8010 --client-id kevin --limit 0
+
+Queue mode (recommended for large galleries):
+    python docs/lightroom_export_stub.py /path/to/gallery --queue --max-wait 7200
 
 If the server has ARGUS_API_TOKEN set, pass --token or export ARGUS_API_TOKEN.
 """
@@ -26,11 +29,32 @@ def main() -> int:
     parser.add_argument("folder", help="Gallery folder with originals")
     parser.add_argument("--base-url", default=os.environ.get("ARGUS_BASE_URL", "http://127.0.0.1:8010"))
     parser.add_argument("--client-id", default=None)
-    parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=0,
+        help="max photos (0 = entire folder)",
+    )
     parser.add_argument("--target-dir", default=".", help="Where to write pulled sidecars")
     parser.add_argument("--token", default=os.environ.get("ARGUS_API_TOKEN"))
     parser.add_argument("--recursive", action="store_true", help="scan subfolders")
     parser.add_argument("--manifest-out", default=None, help="write manifest.json locally after run")
+    parser.add_argument(
+        "--queue",
+        action="store_true",
+        help="submit via POST /jobs (preferred when ARGUS_QUEUE_ENABLED)",
+    )
+    parser.add_argument(
+        "--no-wait",
+        action="store_true",
+        help="return after queue submit without polling",
+    )
+    parser.add_argument(
+        "--max-wait",
+        type=int,
+        default=7200,
+        help="seconds to poll a queued job (default 7200)",
+    )
     args = parser.parse_args()
 
     headers = {}
@@ -47,18 +71,40 @@ def main() -> int:
         print(f"Folder not found: {folder}", file=sys.stderr)
         return 1
 
-    print(f"Analyzing {folder} (limit={args.limit}, recursive={args.recursive}) via {args.base_url} ...")
-    queued = http.analyze_folder(
-        str(folder),
-        limit=args.limit,
-        write_sidecars=True,
-        recursive=args.recursive,
+    limit_label = "all" if args.limit <= 0 else str(args.limit)
+    mode = "queue" if args.queue else "analyze-folder"
+    print(
+        f"Analyzing {folder} (limit={limit_label}, recursive={args.recursive}) "
+        f"via {args.base_url} [{mode}] ..."
     )
-    if "job_id" in queued:
-        queued = http.poll_job(queued["job_id"], max_wait=600)
+
+    if args.queue:
+        queued = http.create_job(
+            str(folder),
+            limit=args.limit,
+            write_sidecars=True,
+            sidecar_dir=str(folder),
+            client_id=args.client_id,
+            recursive=args.recursive,
+        )
+    else:
+        queued = http.analyze_folder(
+            str(folder),
+            limit=args.limit,
+            write_sidecars=True,
+            sidecar_dir=str(folder),
+            recursive=args.recursive,
+        )
+
+    job_id = queued.get("job_id")
+    if job_id and not args.no_wait:
+        queued = http.poll_job(job_id, max_wait=args.max_wait)
         result = queued.get("result") or {}
         run_id = result.get("run_id") or queued.get("run_id")
         count = result.get("count", 0)
+    elif job_id and args.no_wait:
+        print(f"Queued job {job_id} — not waiting (--no-wait)")
+        return 0
     else:
         run_id = queued.get("run_id")
         count = queued.get("count", 0)

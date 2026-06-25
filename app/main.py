@@ -916,6 +916,109 @@ def ui_pipeline_offer(gallery_id: int, request: Request, api_token: Optional[str
     )
 
 
+_CLIENT_STYLES = ("", "f_and_b", "events", "portrait")
+_SHOT_TYPES = (
+    "hero_plate",
+    "detail_texture",
+    "environmental_medium",
+    "wide_establishing",
+    "candid_moment",
+    "portrait_subject",
+    "overhead_flatlay",
+    "action_sequence",
+    "table_scape",
+    "other",
+)
+
+
+def _parse_keyword_boosts(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    boosts: list[str] = []
+    for chunk in raw.replace(",", "\n").splitlines():
+        key = chunk.strip()
+        if key and key not in boosts:
+            boosts.append(key)
+    return boosts[:10]
+
+
+@app.get("/ui/clients", response_class=HTMLResponse, tags=["ui"])
+def ui_clients(request: Request):
+    if config.SAAS_MODE:
+        return RedirectResponse("/", status_code=303)
+    clients = db.list_preference_clients()
+    return templates.TemplateResponse(
+        request,
+        "clients.html",
+        _ui_context(title="Client preferences", clients=clients),
+    )
+
+
+@app.get("/ui/clients/{client_id}", response_class=HTMLResponse, tags=["ui"])
+def ui_client_prefs(request: Request, client_id: str):
+    if config.SAAS_MODE:
+        return RedirectResponse("/", status_code=303)
+    prefs = dict(db.get_preferences(client_id, tenant_id=db.GLOBAL_SCOPE) or {})
+    style = prefs.get("style") or prefs.get("client_style") or ""
+    boosts = prefs.get("keyword_boosts") or []
+    return templates.TemplateResponse(
+        request,
+        "client_prefs.html",
+        _ui_context(
+            title=f"Prefs — {client_id}",
+            client_id=client_id,
+            prefs=prefs,
+            style=style,
+            keyword_boosts_text="\n".join(boosts),
+            shot_type_preference=prefs.get("shot_type_preference") or "",
+            culling_bias=prefs.get("culling_bias", 0.0),
+            styles=_CLIENT_STYLES,
+            shot_types=_SHOT_TYPES,
+            saved=request.query_params.get("saved"),
+        ),
+    )
+
+
+@app.post("/ui/clients/{client_id}", tags=["ui"])
+def ui_client_prefs_save(
+    request: Request,
+    client_id: str,
+    style: Optional[str] = Form(None),
+    shot_type_preference: Optional[str] = Form(None),
+    culling_bias: Optional[str] = Form(None),
+    keyword_boosts: Optional[str] = Form(None),
+    api_token: Optional[str] = Form(None),
+):
+    if config.SAAS_MODE:
+        return RedirectResponse("/", status_code=303)
+    verify_api_access(request, form_token=api_token)
+    prefs: dict = dict(db.get_preferences(client_id, tenant_id=db.GLOBAL_SCOPE) or {})
+    style_val = (style or "").strip()
+    if style_val:
+        prefs["style"] = style_val
+    else:
+        prefs.pop("style", None)
+        prefs.pop("client_style", None)
+    shot_val = (shot_type_preference or "").strip()
+    if shot_val:
+        prefs["shot_type_preference"] = shot_val
+    else:
+        prefs.pop("shot_type_preference", None)
+    try:
+        bias = float(culling_bias or 0)
+    except ValueError:
+        bias = 0.0
+    prefs["culling_bias"] = max(-0.5, min(0.5, bias))
+    boosts = _parse_keyword_boosts(keyword_boosts)
+    if boosts:
+        prefs["keyword_boosts"] = boosts
+    else:
+        prefs.pop("keyword_boosts", None)
+    db.set_preferences(client_id, prefs, style=style_val or None, tenant_id=db.GLOBAL_SCOPE)
+    metrics.inc("preferences_writes")
+    return RedirectResponse(f"/ui/clients/{client_id}?saved=1", status_code=303)
+
+
 @app.get("/ui/compare", response_class=HTMLResponse, tags=["ui"])
 def ui_compare_runs(
     request: Request,

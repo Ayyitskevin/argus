@@ -46,8 +46,8 @@ function exportFilterProvider.sectionForFilterInDialog(f, propertyTable)
                 width_in_chars = 6,
                 validate = function(v)
                     local n = tonumber(v)
-                    if not n or n < 1 then
-                        return false, "Enter a positive limit"
+                    if n == nil or n < 0 then
+                        return false, "Enter 0 for all photos or a positive limit"
                     end
                     return true
                 end,
@@ -64,7 +64,7 @@ function exportFilterProvider.sectionForFilterInDialog(f, propertyTable)
 end
 
 function exportFilterProvider.startDialog(propertyTable)
-    propertyTable.argusLimit = propertyTable.argusLimit or tonumber(pref("limit", 20))
+    propertyTable.argusLimit = propertyTable.argusLimit or tonumber(pref("limit", 0))
     if propertyTable.argusRecursive == nil then
         propertyTable.argusRecursive = pref("recursive", false)
     end
@@ -88,7 +88,7 @@ function exportFilterProvider.processRenderedPhotos(functionContext, exportConte
     local baseUrl = pref("base_url", "http://127.0.0.1:8010")
     local token = pref("api_token", "")
     local clientId = pref("client_id", "")
-    local limit = tonumber(exportContext.propertyTable.argusLimit) or tonumber(pref("limit", 20))
+    local limit = tonumber(exportContext.propertyTable.argusLimit) or tonumber(pref("limit", 0))
     local recursive = exportContext.propertyTable.argusRecursive
     if recursive == nil then
         recursive = pref("recursive", false)
@@ -121,6 +121,9 @@ function exportFilterProvider.processRenderedPhotos(functionContext, exportConte
     if recursive then
         table.insert(cmdParts, "--recursive")
     end
+    table.insert(cmdParts, "--queue")
+    table.insert(cmdParts, "--max-wait")
+    table.insert(cmdParts, "7200")
     local manifestOut = LrPathUtils.child(exportPath, "argus-manifest.json")
     table.insert(cmdParts, "--manifest-out")
     table.insert(cmdParts, quote(manifestOut))

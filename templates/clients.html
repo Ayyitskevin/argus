@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:.75rem">
+    <div>
+      <h2 style="margin:0 0 .35rem 0">Client preferences</h2>
+      <p class="small" style="margin:0">Learned vision nudges per client — style, keywords, culling bias.</p>
+    </div>
+    <div class="nav">
+      <a href="/">← Home</a> · <a href="/ui/pipeline">Pipeline</a>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  {% if clients %}
+  <table style="width:100%; border-collapse:collapse; font-size:.88rem">
+    <thead>
+      <tr style="text-align:left; border-bottom:1px solid var(--line)">
+        <th style="padding:.4rem .5rem">Client</th>
+        <th style="padding:.4rem .5rem">Style</th>
+        <th style="padding:.4rem .5rem">Shot type</th>
+        <th style="padding:.4rem .5rem">Keyword boosts</th>
+        <th style="padding:.4rem .5rem">Updated</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in clients %}
+      <tr style="border-bottom:1px solid var(--line)">
+        <td style="padding:.45rem .5rem">
+          <a href="/ui/clients/{{ row.client_id }}"><strong>{{ row.client_id }}</strong></a>
+        </td>
+        <td style="padding:.45rem .5rem">{{ row.style or '—' }}</td>
+        <td style="padding:.45rem .5rem">{{ row.shot_type_preference or '—' }}</td>
+        <td style="padding:.45rem .5rem">
+          {% if row.keyword_boosts %}
+            {% for kw in row.keyword_boosts %}<span class="tag">{{ kw }}</span>{% endfor %}
+          {% else %}—{% endif %}
+        </td>
+        <td style="padding:.45rem .5rem" class="small">{{ row.updated_at or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="small" style="margin:0">No client preference rows yet. Corrections on a run or POST /preferences will seed the first entry.</p>
+  {% endif %}
+</div>
+{% endblock %}

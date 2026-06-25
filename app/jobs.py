@@ -103,7 +103,19 @@ def _fail_job(job_id: str, error_msg: str) -> None:
     if job:
         gid = mise_dedup.parse_mise_gallery_id(job.get("source"))
         if gid is not None:
-            mise_dedup.record_failed(gid, job.get("client_id"))
+            from .folder_fingerprint import folder_fingerprint
+
+            fp = None
+            folder_raw = job.get("folder")
+            if folder_raw:
+                folder_path = Path(str(folder_raw)).expanduser()
+                if folder_path.is_dir():
+                    fp = folder_fingerprint(
+                        folder_path, recursive=bool(job.get("recursive")),
+                    )
+            mise_dedup.record_failed(
+                gid, job.get("client_id"), folder_fingerprint=fp,
+            )
     _notify(job_id, status="dead_letter", error=error_msg)
 
 
@@ -161,7 +173,12 @@ def process_job(job: dict) -> None:
         )
         gid = mise_dedup.parse_mise_gallery_id(job.get("source"))
         if gid is not None:
-            mise_dedup.record_done(gid, job.get("client_id"), int(result["run_id"]))
+            from .folder_fingerprint import folder_fingerprint
+
+            fp = folder_fingerprint(folder, recursive=bool(job.get("recursive")))
+            mise_dedup.record_done(
+                gid, job.get("client_id"), int(result["run_id"]), folder_fingerprint=fp,
+            )
             from . import plutus_client
 
             plutus_client.handoff_async(gid, int(result["run_id"]))

@@ -17,10 +17,22 @@ def dedup_key(mise_gallery_id: int, client_id: str | None = None) -> str:
     return db.mise_dedup_key(mise_gallery_id, client_id)
 
 
-def lookup(mise_gallery_id: int, client_id: str | None = None) -> dict[str, Any] | None:
+def lookup(
+    mise_gallery_id: int,
+    client_id: str | None = None,
+    *,
+    folder_fingerprint: str | None = None,
+) -> dict[str, Any] | None:
     """Return an existing analyze response shape when a queued/done entry exists."""
     row = db.get_mise_analyze_ledger(dedup_key(mise_gallery_id, client_id))
     if not row or row["status"] not in _ACTIVE:
+        return None
+    stored_fp = row.get("folder_fingerprint")
+    if (
+        folder_fingerprint
+        and stored_fp
+        and stored_fp != folder_fingerprint
+    ):
         return None
     out: dict[str, Any] = {"deduped": True, "mise": {"gallery_id": mise_gallery_id}}
     if client_id:
@@ -46,32 +58,52 @@ def lookup(mise_gallery_id: int, client_id: str | None = None) -> dict[str, Any]
     return None
 
 
-def record_queued(mise_gallery_id: int, client_id: str | None, job_id: str) -> None:
+def record_queued(
+    mise_gallery_id: int,
+    client_id: str | None,
+    job_id: str,
+    *,
+    folder_fingerprint: str | None = None,
+) -> None:
     db.upsert_mise_analyze_ledger(
         dedup_key=dedup_key(mise_gallery_id, client_id),
         mise_gallery_id=mise_gallery_id,
         client_id=client_id,
         status="queued",
         job_id=job_id,
+        folder_fingerprint=folder_fingerprint,
     )
 
 
-def record_done(mise_gallery_id: int, client_id: str | None, run_id: int) -> None:
+def record_done(
+    mise_gallery_id: int,
+    client_id: str | None,
+    run_id: int,
+    *,
+    folder_fingerprint: str | None = None,
+) -> None:
     db.upsert_mise_analyze_ledger(
         dedup_key=dedup_key(mise_gallery_id, client_id),
         mise_gallery_id=mise_gallery_id,
         client_id=client_id,
         status="done",
         run_id=run_id,
+        folder_fingerprint=folder_fingerprint,
     )
 
 
-def record_failed(mise_gallery_id: int, client_id: str | None) -> None:
+def record_failed(
+    mise_gallery_id: int,
+    client_id: str | None,
+    *,
+    folder_fingerprint: str | None = None,
+) -> None:
     db.upsert_mise_analyze_ledger(
         dedup_key=dedup_key(mise_gallery_id, client_id),
         mise_gallery_id=mise_gallery_id,
         client_id=client_id,
         status="failed",
+        folder_fingerprint=folder_fingerprint,
     )
 
 
