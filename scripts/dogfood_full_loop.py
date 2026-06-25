@@ -289,10 +289,32 @@ def main() -> int:
     except Exception as exc:
         _gate(gates, "plutus_run_persisted", False, str(exc))
 
+    review_url = plutus.get("review_url") or f"{_plutus_url()}/runs/{run_id}"
+    pitch_url = plutus.get("pitch_url") or f"{_plutus_url()}/runs/{run_id}/pitch.txt"
+    try:
+        code, body = _get(review_url)
+        _gate(
+            gates,
+            "plutus_review_url",
+            code == 200 and ("Upsell bundles" in body or "bundle" in body.lower()),
+            f"HTTP {code} {review_url}",
+        )
+        code, pitch_body = _get(pitch_url)
+        _gate(
+            gates,
+            "plutus_pitch_url",
+            code == 200 and len(pitch_body.strip()) > 20,
+            f"HTTP {code} {pitch_url}",
+        )
+    except Exception as exc:
+        _gate(gates, "plutus_review_url", False, str(exc))
+        _gate(gates, "plutus_pitch_url", False, str(exc))
+
     ok = all(g["pass"] for g in gates)
     print(f"\n==> Full loop {'PASSED' if ok else 'FAILED'}")
-    print(f"  Argus run: http://127.0.0.1:8010/runs/{argus_run_id}")
-    print(f"  Plutus run: {_plutus_url()}/runs/{run_id}")
+    print(f"  Argus run: {_argus_url()}/runs/{argus_run_id}")
+    print(f"  Plutus review: {review_url}")
+    print(f"  Plutus pitch: {pitch_url}")
 
     report = {"gates": gates, "passed": ok, "argus_run_id": argus_run_id, "plutus_run_id": run_id}
     out = ROOT / "data" / f"dogfood-full-loop-{int(time.time())}.json"

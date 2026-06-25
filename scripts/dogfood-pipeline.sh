@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Homelab pipeline dogfood — Mise gallery → vision → Plutus → offer link
+# Homelab pipeline dogfood — Mise gallery → vision → Plutus review + pitch (studio mode)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -45,15 +45,30 @@ fi
 echo "  redirect=$LOC"
 python3 - <<PY
 from urllib.parse import parse_qs, urlparse, unquote_plus
+import urllib.request
+
 loc = "${LOC}"
 qs = parse_qs(urlparse(loc).query)
 msg = unquote_plus((qs.get("msg") or [""])[0])
-offer = unquote_plus((qs.get("offer_url") or [""])[0])
+review = unquote_plus((qs.get("review_url") or [""])[0])
+pitch = unquote_plus((qs.get("pitch_url") or [""])[0])
 print("  steps:", msg)
-print("  offer:", offer or "(none)")
+print("  review:", review or "(none)")
+print("  pitch:", pitch or "(none)")
 if "error" in qs:
     raise SystemExit(unquote_plus(qs["error"][0]))
-assert offer, "pipeline did not return offer_url"
+if not review or not pitch:
+    raise SystemExit("pipeline did not return review_url and pitch_url")
+
+with urllib.request.urlopen(review, timeout=30) as resp:
+    body = resp.read()
+    assert resp.status == 200, resp.status
+    assert b"Upsell bundles" in body or b"bundle" in body.lower(), "review page missing bundles"
+
+with urllib.request.urlopen(pitch, timeout=30) as resp:
+    text = resp.read().decode()
+    assert resp.status == 200, resp.status
+    assert len(text.strip()) > 20, "pitch.txt too short"
 PY
 
 echo "==> Pipeline dogfood OK"
