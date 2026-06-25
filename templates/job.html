@@ -1,10 +1,6 @@
 {% extends "base.html" %}
 
 {% block content %}
-{% if job.status in ['queued', 'running'] %}
-<meta http-equiv="refresh" content="3">
-{% endif %}
-
 <div class="card">
   <h2 style="margin-top:0">Job <span class="small">{{ job.id[:8] }}…</span></h2>
   <p><span class="badge">{{ job.status }}</span>
@@ -18,7 +14,7 @@
     <div><strong>Created:</strong> {{ job.created_at }} · <strong>Updated:</strong> {{ job.updated_at }}</div>
   </div>
   {% if job.error %}
-  <pre style="margin-top:.75rem; color:#a11">{{ job.error }}</pre>
+  <pre style="margin-top:.75rem; color:var(--err)">{{ job.error }}</pre>
   {% endif %}
   <div class="nav" style="margin-top:1rem">
     <a href="/ui/jobs">← all jobs</a>
@@ -32,8 +28,13 @@
 </div>
 
 {% if job.status in ['queued', 'running'] %}
-<div class="card card-ok">
-  <p class="small" style="margin:0">Processing… this page auto-refreshes every 3s.</p>
+<div class="card card-ok"
+     id="job-progress-card"
+     hx-get="/ui/jobs/{{ job.id }}/progress"
+     hx-trigger="load, every 2s"
+     hx-target="this"
+     hx-swap="innerHTML">
+  {% include "partials/job_progress.html" %}
 </div>
 {% elif job.status == 'done' and run_id %}
 <div class="card">

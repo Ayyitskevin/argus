@@ -17,6 +17,30 @@ def should_track_costs() -> bool:
 
 RETRYABLE_STATUSES = frozenset({"failed", "dead_letter"})
 
+
+def parse_job_progress(job: dict | None) -> dict | None:
+    """Extract in-flight progress from a job row (``result.progress``)."""
+    if not job:
+        return None
+    payload = job.get("result")
+    if not isinstance(payload, dict):
+        return None
+    progress = payload.get("progress")
+    if not isinstance(progress, dict):
+        return None
+    total = int(progress.get("total") or 0)
+    done = int(progress.get("done") or 0)
+    if total <= 0:
+        return None
+    pct = min(100, int(round(100 * done / total)))
+    return {
+        "done": done,
+        "total": total,
+        "percent": pct,
+        "current": progress.get("current"),
+        "run_id": job.get("run_id") or progress.get("run_id"),
+    }
+
 # Jobs stuck in ``running`` longer than this are marked failed (worker still alive).
 STUCK_JOB_MAX_AGE_MINUTES = 30
 
@@ -108,6 +132,7 @@ def process_job(job: dict) -> None:
             client_id=job.get("client_id"),
             recursive=bool(job.get("recursive")),
             tenant=tenant,
+            job_id=job_id,
         )
 
         job_result = {

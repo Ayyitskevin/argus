@@ -298,6 +298,40 @@ def validate_job_create(
     return path, None
 
 
+def _folder_image_list(folder: Path, *, limit: int | None, recursive: bool) -> list[Path]:
+    images = vision.collect_folder_images(folder, recursive=recursive)
+    if limit:
+        images = images[:limit]
+    return images
+
+
+def _raise_if_all_failed(analyses: list) -> None:
+    failed = [a for a in analyses if getattr(a, "analysis_failed", False)]
+    if analyses and len(failed) == len(analyses):
+        first_note = failed[0].culling.notes if failed else "model error"
+        raise AnalyzeError(
+            f"all {len(analyses)} image(s) failed vision analysis: {first_note}", 502
+        )
+
+
+def _folder_run_metadata(
+    out: dict,
+    *,
+    failed_count: int,
+    project_id: str | None,
+    client_id: str | None,
+    recursive: bool,
+) -> dict:
+    if failed_count:
+        out["failed_count"] = failed_count
+    if project_id:
+        out["project_id"] = project_id
+    if client_id:
+        out["client_id"] = client_id
+    out["recursive"] = recursive
+    return out
+
+
 def analyze_folder_run(
     *,
     folder: Path,
@@ -310,17 +344,45 @@ def analyze_folder_run(
     client_id: str | None = None,
     recursive: bool = False,
     tenant: dict | None = None,
+    job_id: str | None = None,
 ) -> dict:
-    """Analyze and persist a folder synchronously."""
+    """Analyze and persist a folder synchronously (incremental when job_id set)."""
     assert_path_within_media_roots(Path(folder))
     model = model or config.VISION_MODEL
     tenant = tenant or (_tenant_dict(get_tenant_id()))
     tenant_id = tenant["id"] if tenant else None
-    planned = limit or 20
+    images = _folder_image_list(folder, limit=limit, recursive=recursive)
+    if not images:
+        raise AnalyzeError("no supported images found in folder", 404)
+    planned = len(images)
     try:
         metering.enforce_caps(tenant_id, images=planned)
     except MeteringError as exc:
         raise AnalyzeError(exc.message, exc.status_code) from exc
+    if config.VISION_BACKEND == "grok" and not config.SAAS_MODE and planned > 0:
+        from .xai_budget import XaiBudgetError, check_budget
+
+        try:
+            check_budget(images=planned)
+        except XaiBudgetError as exc:
+            raise AnalyzeError(str(exc), 402) from exc
+
+    if job_id and images:
+        return _analyze_folder_incremental(
+            folder=folder,
+            source=source,
+            model=model,
+            images=images,
+            project_id=project_id,
+            write_sidecars=write_sidecars,
+            sidecar_dir=sidecar_dir,
+            client_id=client_id,
+            recursive=recursive,
+            tenant=tenant,
+            tenant_id=tenant_id,
+            job_id=job_id,
+        )
+
     prefs = load_preferences(client_id)
     analyses = vision.analyze_folder(
         folder,
@@ -330,15 +392,7 @@ def analyze_folder_run(
         recursive=recursive,
         tenant=tenant,
     )
-    failed = [a for a in analyses if getattr(a, "analysis_failed", False)]
-    if analyses and len(failed) == len(analyses):
-        # Every image errored — the model/provider is down, not a per-photo
-        # quirk. Fail the run so the job retries/dead-letters instead of being
-        # recorded as a successful analysis of junk results.
-        first_note = failed[0].culling.notes if failed else "model error"
-        raise AnalyzeError(
-            f"all {len(analyses)} image(s) failed vision analysis: {first_note}", 502
-        )
+    _raise_if_all_failed(analyses)
     out = persist_analysis_run(
         source=source,
         model=model,
@@ -348,14 +402,97 @@ def analyze_folder_run(
         sidecar_dir=sidecar_dir,
         tenant_id=tenant_id,
     )
-    if failed:
-        out["failed_count"] = len(failed)
-    if project_id:
-        out["project_id"] = project_id
-    if client_id:
-        out["client_id"] = client_id
-    out["recursive"] = recursive
-    return out
+    failed_count = sum(1 for a in analyses if getattr(a, "analysis_failed", False))
+    return _folder_run_metadata(
+        out,
+        failed_count=failed_count,
+        project_id=project_id,
+        client_id=client_id,
+        recursive=recursive,
+    )
+
+
+def _analyze_folder_incremental(
+    *,
+    folder: Path,
+    source: str,
+    model: str,
+    images: list[Path],
+    project_id: str | None,
+    write_sidecars: bool,
+    sidecar_dir: str | None,
+    client_id: str | None,
+    recursive: bool,
+    tenant: dict | None,
+    tenant_id: str | None,
+    job_id: str,
+) -> dict:
+    """Analyze one image at a time so queued jobs expose live progress."""
+    prefs = load_preferences(client_id)
+    run_id = db.create_run(
+        source=source,
+        model=model,
+        project_id=project_id,
+        tenant_id=tenant_id,
+    )
+    total = len(images)
+    db.update_job_progress(job_id, done=0, total=total, run_id=run_id)
+
+    analyses: list = []
+    photos: list[dict] = []
+    sidecars_written: list[str] = []
+
+    for index, image_path in enumerate(images):
+        db.update_job_progress(
+            job_id,
+            done=index,
+            total=total,
+            run_id=run_id,
+            current_file=image_path.name,
+        )
+        try:
+            analysis = vision.analyze_image(
+                image_path,
+                model=model,
+                prefs=prefs,
+                tenant=tenant,
+            )
+        except Exception as exc:
+            log.error("skipping %s: %s", image_path, exc)
+            continue
+        analyses.append(analysis)
+        data = result_to_dict(analysis)
+        db.save_photo_analysis(run_id, data)
+        photos.append(data)
+        if write_sidecars:
+            written = write_sidecar(data["image_path"], data, sidecar_dir=sidecar_dir)
+            sidecars_written.extend(str(path) for path in written.values())
+        db.set_run_photo_count(run_id, len(photos))
+        db.update_job_progress(
+            job_id,
+            done=index + 1,
+            total=total,
+            run_id=run_id,
+            current_file=image_path.name,
+        )
+
+    _raise_if_all_failed(analyses)
+    failed_count = sum(1 for a in analyses if getattr(a, "analysis_failed", False))
+    out = {
+        "run_id": run_id,
+        "source": source,
+        "model": model,
+        "count": len(photos),
+        "photos": photos,
+        "sidecars_written": sidecars_written,
+    }
+    return _folder_run_metadata(
+        out,
+        failed_count=failed_count,
+        project_id=project_id,
+        client_id=client_id,
+        recursive=recursive,
+    )
 
 
 def sort_and_filter_photos(

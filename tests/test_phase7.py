@@ -47,6 +47,16 @@ def test_extract_client_id_from_source():
     assert service.extract_client_id("/plain/path") is None
 
 
+def test_sort_and_filter_photos_hides_low_keepers():
+    photos = [
+        {"basename": "weak.jpg", "culling": {"keeper_score": 0.1}, "keywords": []},
+        {"basename": "strong.jpg", "culling": {"keeper_score": 0.9}, "keywords": []},
+    ]
+    filtered = service.sort_and_filter_photos(photos, min_keeper=0.3)
+    assert len(filtered) == 1
+    assert filtered[0]["basename"] == "strong.jpg"
+
+
 def test_sort_and_filter_photos_by_keeper():
     photos = [
         {"basename": "b.jpg", "culling": {"keeper_score": 0.4}, "keywords": ["food"]},

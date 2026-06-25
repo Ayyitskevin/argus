@@ -1,0 +1,23 @@
+{% if job.status in ['queued', 'running'] %}
+<div id="job-progress-panel">
+  {% if progress %}
+  <p class="small" style="margin:0 0 .5rem">
+    Analyzed <strong>{{ progress.done }}</strong> of <strong>{{ progress.total }}</strong> photos
+    {% if progress.current %} · <code>{{ progress.current }}</code>{% endif %}
+  </p>
+  <div class="progress-track" role="progressbar" aria-valuenow="{{ progress.percent }}" aria-valuemin="0" aria-valuemax="100">
+    <div class="progress-fill" style="width: {{ progress.percent }}%"></div>
+  </div>
+  {% if progress.run_id and progress.done > 0 %}
+  <p class="small" style="margin:.65rem 0 0">
+    <a href="/runs/{{ progress.run_id }}"><strong>View partial results →</strong></a>
+    ({{ progress.done }} photo{{ 's' if progress.done != 1 else '' }} ready to cull)
+  </p>
+  {% endif %}
+  {% else %}
+  <p class="small" style="margin:0">Queued — waiting for a worker slot…</p>
+  {% endif %}
+</div>
+{% elif job.status == 'done' %}
+<p class="small" style="margin:0">Complete.</p>
+{% endif %}

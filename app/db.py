@@ -563,6 +563,24 @@ def get_job(job_id: str, *, tenant_id: str | None = None) -> dict | None:
         close(con)
 
 
+def update_job_progress(
+    job_id: str,
+    *,
+    done: int,
+    total: int,
+    run_id: int | None = None,
+    current_file: str | None = None,
+) -> None:
+    """Persist in-flight folder analyze progress on the job row."""
+    progress: dict[str, object] = {"done": int(done), "total": int(total)}
+    if current_file:
+        progress["current"] = current_file
+    kwargs: dict[str, object] = {"result": {"progress": progress}}
+    if run_id is not None:
+        kwargs["run_id"] = run_id
+    update_job(job_id, **kwargs)
+
+
 def update_job(job_id: str, **kwargs) -> None:
     if not kwargs:
         return

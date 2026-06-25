@@ -1,3 +1,4 @@
+<p class="small" style="margin:0 0 .75rem">Showing <strong>{{ photo_count|default(photos|length) }}</strong> of <strong>{{ photo_total|default(photos|length) }}</strong></p>
 {% for p in photos %}
 <article class="photo photo-card" id="photo-{{ p.id }}" tabindex="-1">
   <a class="photo-thumb" href="/thumb/{{ p.id }}" target="_blank" title="Open thumbnail">

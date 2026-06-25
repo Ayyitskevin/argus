@@ -70,6 +70,8 @@ You evaluate images like a seasoned photo editor on a tight deadline:
 
 Be extremely specific and professional. Never use generic language like "food on a table" or "nice photo". Use the exact kind of language a working F&B photographer would write in a shot list or album notes.
 
+Non-photographic inputs (web UI screenshots, design mockups, placeholder gradients, video thumbnails, export dialogs) are NOT keeper images — assign shot_type "other", keeper_score below 0.15, and keywords that describe the interface (not invented food subjects).
+
 Always return valid JSON only. No markdown, no explanations outside the JSON.
 """
 
@@ -385,6 +387,34 @@ def analyze_image(
     if config.VISION_BACKEND != "grok":
         raise ValueError(f"unsupported VISION_BACKEND: {config.VISION_BACKEND}")
 
+    from .xai_budget import XaiBudgetError, check_budget, record_cost
+
+    try:
+        check_budget(images=1)
+    except XaiBudgetError as exc:
+        log.error("xAI budget blocked %s: %s", image_path, exc)
+        failed = AnalysisResult(
+            image_path=str(image_path),
+            width=width,
+            height=height,
+            shot_type="other",
+            keywords=["analysis-failed"],
+            culling=Culling(
+                keeper_score=0.0,
+                hero_potential=0.0,
+                technical_quality="unknown",
+                notes=str(exc),
+            ),
+            alt_text="Image analysis unavailable.",
+            description="",
+            suggested_iptc={},
+            raw_response=str(exc),
+            model=f"grok:{model}",
+            analysis_failed=True,
+        )
+        _log_image_analyzed(image_path=image_path, model=model, result=failed, started=started)
+        return failed
+
     b64 = base64.b64encode(img_bytes).decode("utf-8")
     user_prompt = USER_PROMPT_TEMPLATE.format(max_tags=config.DEFAULT_MAX_TAGS)
 
@@ -398,7 +428,9 @@ def analyze_image(
                 model=model,
                 temperature=temperature,
             )
-            metrics.record_grok_usage(parse_usage(api_resp))
+            usage = parse_usage(api_resp)
+            metrics.record_grok_usage(usage)
+            record_cost(usage.get("cost_usd"), image_path=str(image_path))
             content = _grok_json_content(api_resp)
             return _parse_vision_payload(content)
 

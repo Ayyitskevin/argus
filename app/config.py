@@ -26,6 +26,10 @@ XAI_API_KEY = os.environ.get("XAI_API_KEY") or None
 XAI_API_BASE = os.environ.get("XAI_API_BASE", "https://api.x.ai/v1")
 XAI_TIMEOUT = float(os.environ.get("XAI_TIMEOUT", "180"))
 VISION_MODEL = os.environ.get("ARGUS_VISION_MODEL", "grok-4-fast")
+# Homelab Grok spend guard (0 = unlimited). SaaS tenants use metering caps instead.
+XAI_DAILY_BUDGET_USD = float(os.environ.get("ARGUS_XAI_DAILY_BUDGET_USD", "0"))
+XAI_ESTIMATED_COST_PER_IMAGE = float(os.environ.get("ARGUS_XAI_ESTIMATED_COST_PER_IMAGE", "0.02"))
+XAI_LEDGER_ENABLED = os.environ.get("ARGUS_XAI_LEDGER_ENABLED", "true").lower() == "true"
 
 # Basic server
 HOST = os.environ.get("ARGUS_HOST", "127.0.0.1")

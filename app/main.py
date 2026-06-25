@@ -26,11 +26,11 @@ from .auth_context import AuthContext
 from . import metering, tenants
 from .tenants import TenantError
 from .callbacks import is_allowed_callback_url
-from .jobs import JobWorker, retry_job
+from .jobs import JobWorker, parse_job_progress, retry_job
 from .sidecars import write_sidecar
 from .vision import make_thumbnail
 from .vision_status import vision_status
-from . import audit, billing, cap_alerts, health, rate_limit, saas, storage, structured_log
+from . import audit, billing, cap_alerts, health, rate_limit, saas, storage, structured_log, xai_budget
 from .saas import assert_upload_only, get_full_run_for_ctx, get_job_for_ctx, tenant_scope
 
 logging.basicConfig(level=logging.INFO)
@@ -208,6 +208,9 @@ def healthz(request: Request):
         "prometheus_enabled": config.PROMETHEUS_ENABLED,
         "model": config.VISION_MODEL,
         "grok_configured": bool(config.XAI_API_KEY),
+        "xai_budget": xai_budget.today_snapshot()
+        if config.VISION_BACKEND == "grok"
+        else {"enabled": False},
         "vision_provider": "xai" if config.VISION_BACKEND == "grok" else config.VISION_BACKEND,
         "saas_mode": config.SAAS_MODE,
         "cloud_cost_cap_usd": config.CLOUD_COST_CAP_USD or None,
@@ -592,10 +595,28 @@ def ui_job_detail(request: Request, job_id: str):
             result = {}
     if not run_id and isinstance(result, dict):
         run_id = result.get("run_id")
+    progress = parse_job_progress(job)
+    if progress and progress.get("run_id"):
+        run_id = progress["run_id"]
     return templates.TemplateResponse(
         request,
         "job.html",
-        _ui_context(job=job, job_result=result, run_id=run_id),
+        _ui_context(job=job, job_result=result, run_id=run_id, progress=progress),
+    )
+
+
+@app.get("/ui/jobs/{job_id}/progress", response_class=HTMLResponse)
+def ui_job_progress(request: Request, job_id: str):
+    ctx = _request_auth(request)
+    job = get_job_for_ctx(job_id, ctx)
+    if not job:
+        return HTMLResponse("Not found", status_code=404)
+    progress = parse_job_progress(job)
+    run_id = job.get("run_id") or (progress or {}).get("run_id")
+    return templates.TemplateResponse(
+        request,
+        "partials/job_progress.html",
+        _ui_context(job=job, progress=progress, run_id=run_id),
     )
 
 
@@ -710,6 +731,8 @@ def _run_review_context(data: dict, **filters) -> dict:
         filter_shot_type=filters.get("shot_type"),
         filter_keyword=filters.get("keyword"),
         filter_min_keeper=filters.get("min_keeper"),
+        photo_count=len(filtered),
+        photo_total=len(photos),
         mise_gallery_id=mise_gallery_id,
         gallery_handoff=handoff,
         plutus_url=pipeline._public_plutus_url(),
