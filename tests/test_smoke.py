@@ -12,9 +12,14 @@ from pathlib import Path
 # Config is read at import time, so the environment must be set before app/db
 # are imported. Isolate the DB and data dir into a temp dir per run.
 _TMP = tempfile.mkdtemp(prefix="argus-smoke-")
+_SMOKE_TOKEN = "smoke-test-token"
 os.environ["ARGUS_VISION_BACKEND"] = "mock"
 os.environ["ARGUS_QUEUE_ENABLED"] = "false"
 os.environ["ARGUS_DATA_DIR"] = _TMP
+os.environ["ARGUS_API_TOKEN"] = _SMOKE_TOKEN
+os.environ["ARGUS_MISE_URL"] = ""
+os.environ["ARGUS_PLUTUS_URL"] = ""
+os.environ["ARGUS_PLUTUS_PUBLIC_URL"] = ""
 
 import pytest
 from fastapi.testclient import TestClient
@@ -24,6 +29,7 @@ from app import config
 from app.main import app
 
 client = TestClient(app)
+_AUTH = {"Authorization": f"Bearer {_SMOKE_TOKEN}"}
 
 
 @pytest.fixture(autouse=True)
@@ -47,11 +53,11 @@ def test_healthz_reports_mock_backend():
     assert body["status"] == "ok"
     assert body["backend"] == "mock"
     assert body["queue_enabled"] is False
-    assert body["auth_enabled"] is False
+    assert body["auth_enabled"] is True
 
 
 def test_analyze_single_local_path(sample_image):
-    r = client.post("/analyze", data={"path": sample_image})
+    r = client.post("/analyze", data={"path": sample_image}, headers=_AUTH)
     assert r.status_code == 200, r.text
     body = r.json()
     # Mock backend marks the model so we never mistake it for a real run.
@@ -63,13 +69,15 @@ def test_analyze_single_local_path(sample_image):
 
 
 def test_analyze_single_missing_path():
-    r = client.post("/analyze", data={"path": "/no/such/file.jpg"})
+    r = client.post("/analyze", data={"path": "/no/such/file.jpg"}, headers=_AUTH)
     assert r.status_code == 404
 
 
 def test_analyze_folder_sync(sample_image):
     folder = str(Path(sample_image).parent)
-    r = client.post("/analyze-folder", data={"folder": folder, "limit": 5})
+    r = client.post(
+        "/analyze-folder", data={"folder": folder, "limit": 5}, headers=_AUTH
+    )
     assert r.status_code == 200, r.text
     body = r.json()
     # Queue disabled -> synchronous run with photos inline, not a job_id.
@@ -79,7 +87,7 @@ def test_analyze_folder_sync(sample_image):
     run_id = body["run_id"]
 
     # The run is persisted and exportable.
-    exp = client.get(f"/runs/{run_id}/export")
+    exp = client.get(f"/runs/{run_id}/export", headers=_AUTH)
     assert exp.status_code == 200
     assert exp.json()["run"]["id"] == run_id
 
@@ -122,6 +130,7 @@ def test_analyze_upload_does_not_write_upload_sidecar(sample_image):
             "/analyze",
             data={"write_sidecar": "true"},
             files={"file": ("../escape.jpg", f, "image/jpeg")},
+            headers=_AUTH,
         )
     assert r.status_code == 200, r.text
     body = r.json()

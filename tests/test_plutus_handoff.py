@@ -42,11 +42,12 @@ def test_studio_links_for_run_from_result(monkeypatch):
 
 
 def test_studio_links_for_run_fallback(monkeypatch):
-    monkeypatch.setattr(config, "PLUTUS_URL", "http://plutus:8030")
+    monkeypatch.setattr(config, "PLUTUS_URL", "http://127.0.0.1:8030")
+    monkeypatch.setattr(config, "PLUTUS_PUBLIC_URL", "http://plutus.test:8030")
     links = plutus_client.studio_links_for_run(7)
     assert links == {
-        "review_url": "http://plutus:8030/runs/7",
-        "pitch_url": "http://plutus:8030/runs/7/pitch.txt",
+        "review_url": "http://plutus.test:8030/runs/7",
+        "pitch_url": "http://plutus.test:8030/runs/7/pitch.txt",
     }
 
 

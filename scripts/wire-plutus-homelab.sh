@@ -4,7 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PLUTUS_ENV="${PLUTUS_ENV_FILE:-$ROOT/../plutus/.env.homelab}"
 ARGUS_ENV="${ARGUS_ENV_FILE:-$ROOT/.env}"
-PLUTUS_URL="${ARGUS_PLUTUS_URL:-http://127.0.0.1:8030}"
+PLUTUS_API_BASE="${ARGUS_PLUTUS_URL:-http://127.0.0.1:8030}"
+PLUTUS_PUBLIC="${PLUTUS_PUBLIC_URL:-http://strix-halo-a9-mega:8030}"
 
 if [[ ! -f "$PLUTUS_ENV" ]]; then
   echo "Missing plutus env: $PLUTUS_ENV" >&2
@@ -22,13 +23,14 @@ if [[ -z "$API_TOKEN" ]]; then
   exit 1
 fi
 
-echo "==> Wire Argus → Plutus homelab ($PLUTUS_URL) → $ARGUS_ENV"
+echo "==> Wire Argus → Plutus homelab (api ${PLUTUS_API_BASE}, public ${PLUTUS_PUBLIC}) → $ARGUS_ENV"
 python3 - <<PY
 from pathlib import Path
 
 env_path = Path("${ARGUS_ENV}")
 updates = {
-    "ARGUS_PLUTUS_URL": "${PLUTUS_URL}",
+    "ARGUS_PLUTUS_URL": "${PLUTUS_API_BASE}",
+    "ARGUS_PLUTUS_PUBLIC_URL": "${PLUTUS_PUBLIC}",
     "ARGUS_PLUTUS_TOKEN": "${API_TOKEN}",
     "ARGUS_PLUTUS_TIMEOUT": "120",
 }
@@ -64,7 +66,7 @@ elif systemctl is-active argus >/dev/null 2>&1; then
   sleep 2
 fi
 
-curl -sf "${PLUTUS_URL}/healthz" | python3 -c "
+curl -sf "${PLUTUS_API_BASE}/healthz" | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
 print('  plutus health:', d.get('status'), 'studio_mode=', d.get('studio_mode'))

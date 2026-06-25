@@ -20,7 +20,7 @@ class PipelineError(Exception):
 
 
 def _public_plutus_url() -> str:
-    return config.PLUTUS_URL or "http://127.0.0.1:8030"
+    return config.PLUTUS_PUBLIC_URL or config.PLUTUS_URL or "http://127.0.0.1:8030"
 
 
 def _public_argus_url() -> str:

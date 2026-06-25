@@ -147,6 +147,10 @@ MISE_TIMEOUT = int(os.environ.get("ARGUS_MISE_TIMEOUT", "10"))
 
 # Homelab: Plutus upsell hand-off after Mise gallery analyze (:8030).
 PLUTUS_URL = os.environ.get("ARGUS_PLUTUS_URL", "").rstrip("/")
+# Browser-facing review/pitch links (defaults to PLUTUS_URL when unset).
+PLUTUS_PUBLIC_URL = (
+    os.environ.get("ARGUS_PLUTUS_PUBLIC_URL", "").rstrip("/") or PLUTUS_URL
+)
 PLUTUS_TOKEN = os.environ.get("ARGUS_PLUTUS_TOKEN", "")
 # Admin token for /integrations/offer when SaaS tenant_id is set (defaults to PLUTUS_TOKEN).
 PLUTUS_ADMIN_TOKEN = os.environ.get("ARGUS_PLUTUS_ADMIN_TOKEN", "") or PLUTUS_TOKEN
