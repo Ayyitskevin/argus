@@ -8,7 +8,9 @@ See [`docs/PHASE-0.md`](docs/PHASE-0.md) for the initial scope and what we're pr
 **Vision:** xAI Grok API only (`ARGUS_VISION_BACKEND=grok`). Mock for CI. No local qwen/Ollama.
 See [`docs/DOGFOOD-STANDARD.md`](docs/DOGFOOD-STANDARD.md). CI stays mock-only.
 
-This is the shared vision/metadata layer for the photography AI suite (feeds mnemosyne/albumwright, platekit, etc.).
+**Studio mode (default):** homelab `:8010` vision for [Mise](https://github.com/Ayyitskevin/mise) gallery publish → [Plutus](https://github.com/Ayyitskevin/plutus) bundles. No Stripe, no SaaS signup.
+
+This is the shared vision/metadata layer for the Kevin Lee photography suite (Mise → Argus → Plutus).
 
 ## Quickstart (Phase 0 — local dogfood)
 
