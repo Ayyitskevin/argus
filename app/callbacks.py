@@ -113,6 +113,12 @@ def fire_job_callback(job: dict, *, status: str, result: dict | None = None, err
         "folder": job.get("folder"),
         "client_id": job.get("client_id"),
     }
+    from .service import studio_run_urls
+
+    if job.get("run_id"):
+        payload.update(studio_run_urls(run_id=int(job["run_id"])))
+    elif status == "queued" and job.get("id"):
+        payload.update(studio_run_urls(job_id=str(job["id"])))
 
     def _post() -> None:
         try:

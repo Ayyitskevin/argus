@@ -812,15 +812,20 @@ def ui_pipeline_plutus(gallery_id: int, request: Request, api_token: Optional[st
             status_code=303,
         )
     run_id = int(result.get("run_id") or 0)
+    links = plutus_client.studio_links_for_run(run_id, result) if run_id else {}
     if run_id:
-        mise_client.plutus_callback(gallery_id, run_id=run_id, status="done")
-    plutus_msg = (
-        f"Plutus run {result.get('run_id')} — {len(result.get('bundles') or [])} bundles"
-    )
-    return RedirectResponse(
-        f"/ui/pipeline?msg={quote_plus(plutus_msg)}",
-        status_code=303,
-    )
+        mise_client.plutus_callback(
+            gallery_id,
+            run_id=run_id,
+            status="done",
+            **plutus_client.studio_handoff_fields(result),
+        )
+    bundle_n = result.get("bundle_count") or len(result.get("bundles") or [])
+    plutus_msg = f"Plutus run {run_id} — {bundle_n} bundles"
+    query = f"msg={quote_plus(plutus_msg)}"
+    if links:
+        query += f"&review_url={quote_plus(links['review_url'])}&pitch_url={quote_plus(links['pitch_url'])}"
+    return RedirectResponse(f"/ui/pipeline?{query}", status_code=303)
 
 
 @app.post("/ui/pipeline/run-all/{gallery_id}", tags=["ui"])
@@ -836,15 +841,19 @@ def ui_pipeline_run_all(gallery_id: int, request: Request, api_token: Optional[s
             status_code=303,
         )
     msg = " · ".join(result.get("steps") or [])
-    offer_url = result.get("offer_url") or ""
-    return RedirectResponse(
-        f"/ui/pipeline?msg={quote_plus(msg)}&offer_url={quote_plus(offer_url)}",
-        status_code=303,
-    )
+    review_url = result.get("review_url") or ""
+    pitch_url = result.get("pitch_url") or ""
+    query = f"msg={quote_plus(msg)}"
+    if review_url:
+        query += f"&review_url={quote_plus(review_url)}"
+    if pitch_url:
+        query += f"&pitch_url={quote_plus(pitch_url)}"
+    return RedirectResponse(f"/ui/pipeline?{query}", status_code=303)
 
 
 @app.post("/ui/pipeline/offer/{gallery_id}", tags=["ui"])
 def ui_pipeline_offer(gallery_id: int, request: Request, api_token: Optional[str] = Form(None)):
+    """Retired — studio mode uses bundle review + pitch.txt, not storefront offers."""
     if config.SAAS_MODE:
         return RedirectResponse("/", status_code=303)
     verify_api_access(request, form_token=api_token)
@@ -852,21 +861,15 @@ def ui_pipeline_offer(gallery_id: int, request: Request, api_token: Optional[str
     plutus_run_id = handoff.get("plutus_run_id")
     if not plutus_run_id:
         return RedirectResponse(
-            "/ui/pipeline?error=Plutus+upsell+required+before+client+offer",
+            "/ui/pipeline?error=Plutus+bundles+required+before+client+pitch",
             status_code=303,
         )
-    label = handoff.get("title") or f"Gallery {gallery_id}"
-    try:
-        link = plutus_client.create_share_link(int(plutus_run_id), label=label)
-    except plutus_client.PlutusClientError as exc:
-        return RedirectResponse(
-            f"/ui/pipeline?error={quote_plus(str(exc))}",
-            status_code=303,
-        )
-    offer_url = link.get("public_url") or ""
-    msg = f"Client offer ready — {offer_url}"
+    links = plutus_client.studio_links_for_run(int(plutus_run_id))
     return RedirectResponse(
-        f"/ui/pipeline?msg={quote_plus(msg)}&offer_url={quote_plus(offer_url)}",
+        "/ui/pipeline?"
+        f"msg={quote_plus('Studio mode — review bundles and copy pitch.txt')}"
+        f"&review_url={quote_plus(links['review_url'])}"
+        f"&pitch_url={quote_plus(links['pitch_url'])}",
         status_code=303,
     )
 

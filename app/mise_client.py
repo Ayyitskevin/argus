@@ -74,6 +74,10 @@ def plutus_callback(
     status: str = "done",
     error: str | None = None,
     offer_url: str | None = None,
+    review_url: str | None = None,
+    pitch_url: str | None = None,
+    bundle_count: int | None = None,
+    estimated_total_cents: int | None = None,
 ) -> None:
     """Best-effort write-back so pipeline dashboard shows plutus_last_*."""
     if not is_enabled():
@@ -84,8 +88,18 @@ def plutus_callback(
         payload["run_id"] = run_id
     if error:
         payload["error"] = error
+    if review_url:
+        payload["review_url"] = review_url
+    if pitch_url:
+        payload["pitch_url"] = pitch_url
+    if bundle_count is not None:
+        payload["bundle_count"] = bundle_count
+    if estimated_total_cents is not None:
+        payload["estimated_total_cents"] = estimated_total_cents
     if offer_url:
         payload["offer_url"] = offer_url
+    elif review_url:
+        payload["offer_url"] = review_url
     try:
         with httpx.Client(timeout=config.MISE_TIMEOUT) as client:
             resp = client.post(

@@ -27,6 +27,29 @@ def test_plutus_client_disabled_by_default():
     assert plutus_client.is_enabled() is False
 
 
+def test_studio_links_for_run_from_result(monkeypatch):
+    monkeypatch.setattr(config, "PLUTUS_URL", "http://plutus:8030")
+    links = plutus_client.studio_links_for_run(
+        5,
+        {
+            "run_id": 5,
+            "review_url": "http://plutus.test/runs/5",
+            "pitch_url": "http://plutus.test/runs/5/pitch.txt",
+        },
+    )
+    assert links["review_url"] == "http://plutus.test/runs/5"
+    assert links["pitch_url"] == "http://plutus.test/runs/5/pitch.txt"
+
+
+def test_studio_links_for_run_fallback(monkeypatch):
+    monkeypatch.setattr(config, "PLUTUS_URL", "http://plutus:8030")
+    links = plutus_client.studio_links_for_run(7)
+    assert links == {
+        "review_url": "http://plutus:8030/runs/7",
+        "pitch_url": "http://plutus:8030/runs/7/pitch.txt",
+    }
+
+
 def test_recommend_mise_gallery_posts(monkeypatch):
     monkeypatch.setattr(config, "PLUTUS_URL", "http://plutus:8030")
     monkeypatch.setattr(config, "PLUTUS_TOKEN", "shared-secret")
@@ -68,20 +91,17 @@ def test_handoff_async_records_mise_callback(monkeypatch):
     callbacks: list[dict] = []
 
     def fake_recommend(gid, *, argus_run_id=None):
-        return {"run_id": 12, "bundles": [{}]}
+        return {
+            "run_id": 12,
+            "bundles": [{}],
+            "bundle_count": 1,
+            "estimated_total_cents": 5000,
+            "review_url": "http://plutus:8030/runs/12",
+            "pitch_url": "http://plutus:8030/runs/12/pitch.txt",
+        }
 
-    def fake_callback(
-        gallery_id, *, run_id=None, status="done", error=None, offer_url=None
-    ):
-        callbacks.append(
-            {
-                "gallery_id": gallery_id,
-                "run_id": run_id,
-                "status": status,
-                "error": error,
-                "offer_url": offer_url,
-            }
-        )
+    def fake_callback(gallery_id, **kwargs):
+        callbacks.append({"gallery_id": gallery_id, **kwargs})
 
     monkeypatch.setattr(plutus_client, "recommend_mise_gallery", fake_recommend)
     monkeypatch.setattr("app.mise_client.plutus_callback", fake_callback)
@@ -89,76 +109,10 @@ def test_handoff_async_records_mise_callback(monkeypatch):
     import time
 
     time.sleep(0.2)
-    assert callbacks == [
-        {
-            "gallery_id": 5,
-            "run_id": 12,
-            "status": "done",
-            "error": None,
-            "offer_url": None,
-        }
-    ]
-
-
-def test_create_share_link_posts(monkeypatch):
-    monkeypatch.setattr(config, "PLUTUS_URL", "http://plutus:8030")
-    monkeypatch.setattr(config, "PLUTUS_TOKEN", "shared-secret")
-    monkeypatch.setattr(config, "PLUTUS_TENANT_ID", None)
-    captured: dict = {}
-
-    class _Resp:
-        def read(self):
-            return json.dumps(
-                {"public_url": "http://plutus:8030/store/studio/offer/tok1"}
-            ).encode()
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-    def fake_urlopen(req, timeout=60):
-        captured["url"] = req.full_url
-        captured["body"] = req.data.decode()
-        return _Resp()
-
-    with patch("app.plutus_client.urllib.request.urlopen", fake_urlopen):
-        link = plutus_client.create_share_link(6, label="Wedding")
-
-    assert link["public_url"].endswith("/offer/tok1")
-    assert "run_id=6" in captured["body"]
-    assert "label=Wedding" in captured["body"]
-    assert captured["url"].endswith("/storefront/share-links")
-
-
-def test_create_share_link_uses_integrations_when_tenant_set(monkeypatch):
-    monkeypatch.setattr(config, "PLUTUS_URL", "http://plutus:8031")
-    monkeypatch.setattr(config, "PLUTUS_TOKEN", "hook-secret")
-    monkeypatch.setattr(config, "PLUTUS_ADMIN_TOKEN", "admin-secret")
-    monkeypatch.setattr(config, "PLUTUS_TENANT_ID", "flow-studio")
-    captured: dict = {}
-
-    class _Resp:
-        def read(self):
-            return json.dumps(
-                {"public_url": "http://plutus:8031/store/studio/offer/tok2"}
-            ).encode()
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return False
-
-    def fake_urlopen(req, timeout=60):
-        captured["url"] = req.full_url
-        captured["body"] = req.data.decode()
-        return _Resp()
-
-    with patch("app.plutus_client.urllib.request.urlopen", fake_urlopen):
-        link = plutus_client.create_share_link(7, label="Album")
-
-    assert link["public_url"].endswith("/offer/tok2")
-    assert captured["url"].endswith("/integrations/offer")
-    assert "tenant_id=flow-studio" in captured["body"]
+    assert len(callbacks) == 1
+    assert callbacks[0]["gallery_id"] == 5
+    assert callbacks[0]["run_id"] == 12
+    assert callbacks[0]["review_url"] == "http://plutus:8030/runs/12"
+    assert callbacks[0]["pitch_url"] == "http://plutus:8030/runs/12/pitch.txt"
+    assert callbacks[0]["bundle_count"] == 1
+    assert callbacks[0]["estimated_total_cents"] == 5000

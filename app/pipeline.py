@@ -1,4 +1,4 @@
-"""Homelab pipeline status — Mise galleries → Argus vision → Plutus upsell."""
+"""Homelab pipeline status — Mise galleries → Argus vision → Plutus bundles."""
 from __future__ import annotations
 
 import logging
@@ -24,6 +24,8 @@ def _public_plutus_url() -> str:
 
 
 def _public_argus_url() -> str:
+    if config.PUBLIC_URL:
+        return config.PUBLIC_URL.rstrip("/")
     hint = (config.TAILSCALE_HINT or "127.0.0.1").lower()
     return f"http://{hint}:{config.PORT}"
 
@@ -128,7 +130,7 @@ def _wait_mise_plutus(gallery_id: int, *, timeout: float = 90) -> int | None:
 
 
 def run_all(gallery_id: int, *, vision_limit: int | None = None) -> dict[str, Any]:
-    """Vision (if needed) → Plutus upsell → client offer link."""
+    """Vision (if needed) → Plutus bundles → review + pitch links (studio mode)."""
     if not plutus_client.is_enabled():
         raise PipelineError("Plutus is not configured (ARGUS_PLUTUS_URL + token)")
 
@@ -173,7 +175,7 @@ def run_all(gallery_id: int, *, vision_limit: int | None = None) -> dict[str, An
         steps.append(f"vision skipped (run {argus_run_id})")
 
     plutus_run_id: int | None = None
-    auto_offer_url: str | None = None
+    plutus_result: dict | None = None
     if vision_ran:
         plutus_run_id = _wait_mise_plutus(gallery_id)
 
@@ -181,7 +183,7 @@ def run_all(gallery_id: int, *, vision_limit: int | None = None) -> dict[str, An
         handoff = gallery_handoff(gallery_id) or {}
         if not vision_ran and handoff.get("plutus_status") == "done" and handoff.get("plutus_run_id"):
             plutus_run_id = int(handoff["plutus_run_id"])
-            steps.append(f"upsell skipped (run {plutus_run_id})")
+            steps.append(f"bundles skipped (run {plutus_run_id})")
         else:
             try:
                 plutus_result = plutus_client.recommend_mise_gallery(
@@ -191,39 +193,32 @@ def run_all(gallery_id: int, *, vision_limit: int | None = None) -> dict[str, An
                 mise_client.plutus_callback(gallery_id, status="error", error=str(exc))
                 raise PipelineError(str(exc)) from exc
             plutus_run_id = int(plutus_result["run_id"])
-            auto_offer_url = plutus_result.get("offer_url") or None
-            mise_client.plutus_callback(
-                gallery_id,
-                run_id=plutus_run_id,
-                status="done",
-                offer_url=auto_offer_url,
+            bundle_n = plutus_result.get("bundle_count") or len(
+                plutus_result.get("bundles") or []
             )
-            bundle_n = len(plutus_result.get("bundles") or [])
-            steps.append(f"upsell run {plutus_run_id} ({bundle_n} bundles)")
+            steps.append(f"bundles run {plutus_run_id} ({bundle_n} bundles)")
     else:
-        steps.append(f"upsell run {plutus_run_id} (auto)")
+        steps.append(f"bundles run {plutus_run_id} (auto)")
 
-    label = (gallery_handoff(gallery_id) or {}).get("title") or f"Gallery {gallery_id}"
-    if auto_offer_url:
-        offer_url = auto_offer_url
-    else:
-        try:
-            link = plutus_client.create_share_link(plutus_run_id, label=label)
-            offer_url = link["public_url"]
-        except plutus_client.PlutusClientError as exc:
-            raise PipelineError(str(exc)) from exc
-    steps.append("offer link ready")
+    links = plutus_client.studio_links_for_run(plutus_run_id, plutus_result)
+    callback_fields = (
+        plutus_client.studio_handoff_fields(plutus_result)
+        if plutus_result
+        else links
+    )
     mise_client.plutus_callback(
         gallery_id,
         run_id=plutus_run_id,
         status="done",
-        offer_url=offer_url,
+        **callback_fields,
     )
+    steps.append("review + pitch ready")
 
     return {
         "gallery_id": gallery_id,
         "argus_run_id": argus_run_id,
         "plutus_run_id": plutus_run_id,
-        "offer_url": offer_url,
+        "review_url": links["review_url"],
+        "pitch_url": links["pitch_url"],
         "steps": steps,
     }

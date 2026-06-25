@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -32,6 +31,36 @@ def connectivity() -> dict[str, Any]:
     except Exception as exc:
         return {"configured": True, "reachable": False, "detail": str(exc)[:200]}
     return {"configured": True, "reachable": reachable}
+
+
+def studio_links_for_run(run_id: int, result: dict | None = None) -> dict[str, str]:
+    """Review + pitch URLs for studio mode (no client storefront)."""
+    if result:
+        review = result.get("review_url")
+        pitch = result.get("pitch_url")
+        if review and pitch:
+            return {"review_url": str(review), "pitch_url": str(pitch)}
+    base = config.PLUTUS_URL.rstrip("/")
+    return {
+        "review_url": f"{base}/runs/{run_id}",
+        "pitch_url": f"{base}/runs/{run_id}/pitch.txt",
+    }
+
+
+def studio_handoff_fields(result: dict) -> dict[str, Any]:
+    """Fields for Mise /api/plutus/callback from a recommend response."""
+    run_id = int(result["run_id"])
+    fields = studio_links_for_run(run_id, result)
+    bundles = result.get("bundles")
+    count = result.get("bundle_count")
+    if count is None and bundles is not None:
+        count = len(bundles)
+    if count is not None:
+        fields["bundle_count"] = int(count)
+    cents = result.get("estimated_total_cents")
+    if cents is not None:
+        fields["estimated_total_cents"] = int(cents)
+    return fields
 
 
 def recommend_mise_gallery(mise_gallery_id: int, *, argus_run_id: int | None = None) -> dict:
@@ -80,6 +109,7 @@ def create_share_link(
     *,
     label: str | None = None,
 ) -> dict:
+    """SaaS storefront offer minting — not used in studio/homelab mode."""
     if not is_enabled():
         raise PlutusClientError("Plutus is not configured")
     fields: dict[str, str] = {"run_id": str(run_id)}
@@ -147,7 +177,7 @@ def handoff_async(mise_gallery_id: int, argus_run_id: int) -> None:
                     mise_gallery_id,
                     run_id=run_id,
                     status="done",
-                    offer_url=result.get("offer_url"),
+                    **studio_handoff_fields(result),
                 )
         except PlutusClientError as exc:
             log.warning("plutus handoff failed gallery %s: %s", mise_gallery_id, exc)
@@ -155,6 +185,8 @@ def handoff_async(mise_gallery_id: int, argus_run_id: int) -> None:
         except Exception as exc:
             log.exception("plutus handoff unexpected failure gallery %s", mise_gallery_id)
             mise_client.plutus_callback(mise_gallery_id, status="error", error=str(exc)[:500])
+
+    import threading
 
     threading.Thread(
         target=_post,

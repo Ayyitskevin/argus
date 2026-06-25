@@ -4,7 +4,7 @@
   <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:.75rem">
     <div>
       <h2 style="margin:0 0 .35rem 0">Homelab pipeline</h2>
-      <p class="small" style="margin:0">Mise publish → Argus Grok vision → Plutus print bundles</p>
+      <p class="small" style="margin:0">Mise publish → Argus vision → Plutus bundles → review + client pitch</p>
     </div>
     <div class="nav">
       <a href="/">← Home</a> · <a href="/ui/jobs">Jobs</a>
@@ -39,11 +39,15 @@
     {{ counts.argus_done }} vision done · {{ counts.plutus_done }} upsell done
   </p>
   {% if pipeline_message %}<p class="status-ok">{{ pipeline_message }}</p>{% endif %}
-  {% if request.query_params.get('offer_url') %}
-  <p class="small">Client URL:
-    <a href="{{ request.query_params.get('offer_url') }}">{{ request.query_params.get('offer_url') }}</a>
-    <button type="button" class="secondary" style="margin-left:.35rem;font-size:.78rem"
-      onclick="navigator.clipboard.writeText('{{ request.query_params.get('offer_url') }}')">Copy</button>
+  {% if request.query_params.get('review_url') or request.query_params.get('pitch_url') %}
+  <p class="small" style="margin:.5rem 0 0">
+    {% if request.query_params.get('review_url') %}
+    <a href="{{ request.query_params.get('review_url') }}" target="_blank" rel="noopener">Review bundles</a>
+    {% endif %}
+    {% if request.query_params.get('pitch_url') %}
+    {% if request.query_params.get('review_url') %} · {% endif %}
+    <a href="{{ request.query_params.get('pitch_url') }}" target="_blank" rel="noopener">Client pitch</a>
+    {% endif %}
   </p>
   {% endif %}
   {% if pipeline_error %}<p class="status-err">{{ pipeline_error }}</p>{% endif %}
@@ -89,11 +93,7 @@
           <button type="submit" class="secondary" style="font-size:.78rem;padding:.25rem .5rem">Upsell</button>
         </form>
         {% endif %}
-        {% if handoff.plutus_auto and g.plutus_run_id and g.plutus_status == 'done' %}
-        <form method="post" action="/ui/pipeline/offer/{{ g.id }}" class="inline-form">
-          <button type="submit" class="secondary" style="font-size:.78rem;padding:.25rem .5rem">Offer</button>
-        </form>
-        {% endif %}
+
         {% else %}
         <span class="small">auth required</span>
         {% endif %}
@@ -108,10 +108,10 @@
 
 <div class="card card-muted">
   <h3 style="margin-top:0">Dogfood scripts</h3>
-  <pre class="small" style="margin:0;white-space:pre-wrap">python scripts/dogfood_mise_loop.py
+  <pre class="small" style="margin:0;white-space:pre-wrap">bash scripts/dogfood-studio-loop.sh 1
+python scripts/dogfood_mise_loop.py
 python scripts/dogfood_full_loop.py --trigger --gallery-id 1 --limit 2 --wait
-python scripts/dogfood_export_folder.py ~/photos/export --limit 10
-python scripts/dogfood_prefs_roundtrip.py data/demo/01-appetite.jpg</pre>
+python scripts/dogfood_export_folder.py ~/photos/export --limit 10</pre>
 </div>
 
 <style>
