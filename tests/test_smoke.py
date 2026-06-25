@@ -34,6 +34,7 @@ _AUTH = {"Authorization": f"Bearer {_SMOKE_TOKEN}"}
 
 @pytest.fixture(autouse=True)
 def _mock_queue_off(monkeypatch):
+    monkeypatch.setattr(config, "API_TOKEN", _SMOKE_TOKEN)
     monkeypatch.setattr(config, "QUEUE_ENABLED", False)
     monkeypatch.setattr(config, "VISION_BACKEND", "mock")
 

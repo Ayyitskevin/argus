@@ -10,6 +10,11 @@ pydantic
 httpx
 python-dotenv
 
+# Dev / CI
+pytest
+pytest-asyncio
+ruff
+
 # Optional: ARGUS_STORAGE_BACKEND=s3
 # boto3
 # Optional: ARGUS_REDIS_URL for distributed rate limits

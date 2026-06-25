@@ -16,6 +16,7 @@ _counters: dict[str, int] = {
     "jobs_completed": 0,
     "jobs_failed": 0,
     "jobs_retried": 0,
+    "jobs_recovered": 0,
     "jobs_dead_letter": 0,
     "photos_analyzed": 0,
     "preferences_writes": 0,

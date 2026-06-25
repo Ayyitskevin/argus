@@ -10,6 +10,7 @@ os.environ["ARGUS_DATA_DIR"] = _TMP
 os.environ["ARGUS_VISION_BACKEND"] = "mock"
 
 from app import db  # noqa: E402
+from app.jobs import reconcile_on_startup, reconcile_stuck_jobs  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -30,6 +31,29 @@ def test_reconcile_stale_running_marks_failed():
     job = db.get_job(job_id)
     assert job["status"] == "failed"
     assert "stale" in (job.get("error") or "").lower()
+
+
+def test_reconcile_on_startup_requeues_all_running():
+    fresh_id = db.create_job("/data/fresh", source="test", model="mock:test")
+    db.update_job(fresh_id, status="running")
+    assert reconcile_on_startup() == 1
+    assert db.get_job(fresh_id)["status"] == "queued"
+    assert db.get_job(fresh_id).get("error") is None
+
+
+def test_reconcile_stuck_jobs_only_affects_old_running():
+    fresh_id = db.create_job("/data/new-run", source="test", model="mock:test")
+    db.update_job(fresh_id, status="running")
+    old_id = db.create_job("/data/old-run", source="test", model="mock:test")
+    db.update_job(old_id, status="running")
+    with db.tx() as con:
+        con.execute(
+            "UPDATE jobs SET updated_at=datetime('now', '-45 minutes') WHERE id=?",
+            (old_id,),
+        )
+    assert reconcile_stuck_jobs(max_age_minutes=30) == 1
+    assert db.get_job(fresh_id)["status"] == "running"
+    assert db.get_job(old_id)["status"] == "failed"
 
 
 def test_purge_ephemeral_tmp_jobs():

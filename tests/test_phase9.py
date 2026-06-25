@@ -13,7 +13,7 @@ os.environ["ARGUS_VISION_BACKEND"] = "mock"
 os.environ["ARGUS_DATA_DIR"] = _TMP
 
 from app import config, db, metrics  # noqa: E402
-from app.jobs import _fail_job, process_job  # noqa: E402
+from app.jobs import JobWorker, _fail_job, process_job  # noqa: E402
 from app.main import app  # noqa: E402
 
 client = TestClient(app)
@@ -116,6 +116,37 @@ def test_fail_job_helper_increments_metrics():
     _fail_job(job_id, "synthetic failure")
     after = metrics.snapshot()["counters"]["jobs_retried"]
     assert after == before + 1
+
+
+def test_failed_jobs_listed_and_retryable():
+    job_id = db.create_job("/no/such/folder", source="failed-visible")
+    db.update_job(job_id, status="failed", error="simulated worker crash")
+
+    listed = client.get("/jobs?status=failed", headers=AUTH).json()["jobs"]
+    assert any(row["id"] == job_id for row in listed)
+
+    ok = client.post(f"/jobs/{job_id}/retry", headers=AUTH)
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["status"] == "queued"
+    assert db.get_job(job_id)["retry_count"] == 0
+
+
+def test_worker_start_calls_reconcile_on_startup(monkeypatch):
+    calls: list[int] = []
+
+    def _fake_reconcile() -> int:
+        calls.append(1)
+        return 0
+
+    monkeypatch.setattr(config, "QUEUE_ENABLED", True)
+    monkeypatch.setattr("app.jobs.reconcile_on_startup", _fake_reconcile)
+
+    worker = JobWorker()
+    worker.start()
+    try:
+        assert calls == [1]
+    finally:
+        worker.stop()
 
 
 def test_manual_job_retry_api():

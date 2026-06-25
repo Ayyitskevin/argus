@@ -40,7 +40,7 @@ def studio_links_for_run(run_id: int, result: dict | None = None) -> dict[str, s
         pitch = result.get("pitch_url")
         if review and pitch:
             return {"review_url": str(review), "pitch_url": str(pitch)}
-    base = config.PLUTUS_PUBLIC_URL.rstrip("/")
+    base = (config.PLUTUS_PUBLIC_URL or config.PLUTUS_URL).rstrip("/")
     return {
         "review_url": f"{base}/runs/{run_id}",
         "pitch_url": f"{base}/runs/{run_id}/pitch.txt",

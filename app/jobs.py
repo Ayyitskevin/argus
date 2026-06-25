@@ -17,6 +17,33 @@ def should_track_costs() -> bool:
 
 RETRYABLE_STATUSES = frozenset({"failed", "dead_letter"})
 
+# Jobs stuck in ``running`` longer than this are marked failed (worker still alive).
+STUCK_JOB_MAX_AGE_MINUTES = 30
+
+
+def reconcile_on_startup() -> int:
+    """Re-queue jobs left ``running`` after a crash, deploy, or SIGKILL mid-job."""
+    count = db.reconcile_stale_running_jobs(
+        max_age_minutes=None,
+        new_status="queued",
+        error=None,
+    )
+    if count:
+        metrics.inc("jobs_recovered", count)
+    return count
+
+
+def reconcile_stuck_jobs(
+    *,
+    max_age_minutes: int = STUCK_JOB_MAX_AGE_MINUTES,
+) -> int:
+    """Mark long-running jobs failed so they surface in /jobs?status=failed."""
+    return db.reconcile_stale_running_jobs(
+        max_age_minutes=max_age_minutes,
+        new_status="failed",
+        error="stale: exceeded max runtime without completion",
+    )
+
 
 def retry_job(job_id: str) -> dict:
     """Re-queue a terminal failed job for another worker pass."""
@@ -136,9 +163,9 @@ class JobWorker:
         if not config.QUEUE_ENABLED or self._thread is not None:
             return
         db.init()
-        stale = db.reconcile_stale_running_jobs(max_age_minutes=30)
-        if stale:
-            log.warning("Reconciled %s stale running job(s) on worker start", stale)
+        recovered = reconcile_on_startup()
+        if recovered:
+            log.warning("Re-queued %s orphaned running job(s) after worker start", recovered)
         self._thread = threading.Thread(target=self._loop, name="argus-job-worker", daemon=True)
         self._thread.start()
         log.info("Queue worker started")
@@ -157,6 +184,9 @@ class JobWorker:
             self._cleanup_ticks += 1
             if self._cleanup_ticks % 100 == 0:
                 db.cleanup_old_jobs(days=config.JOB_RETENTION_DAYS)
+                stuck = reconcile_stuck_jobs()
+                if stuck:
+                    log.warning("Marked %s stuck running job(s) as failed", stuck)
 
             if self._slots.acquire(blocking=False):
                 job = db.claim_next_job()

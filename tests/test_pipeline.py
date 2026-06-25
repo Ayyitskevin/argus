@@ -27,6 +27,7 @@ def _reset(monkeypatch):
     monkeypatch.setattr(config, "MISE_URL", "")
     monkeypatch.setattr(config, "MISE_API_TOKEN", "")
     monkeypatch.setattr(config, "PLUTUS_URL", "")
+    monkeypatch.setattr(config, "PLUTUS_PUBLIC_URL", "")
     monkeypatch.setattr(config, "PLUTUS_TOKEN", "")
     yield
 

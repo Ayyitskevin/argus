@@ -18,10 +18,22 @@ def _check_database() -> dict[str, str]:
 def _check_queue(worker: Any | None) -> dict[str, str]:
     if not config.QUEUE_ENABLED:
         return {"status": "disabled"}
-    running = bool(worker and getattr(worker, "is_running", lambda: False)())
+    worker_running = bool(worker and getattr(worker, "is_running", lambda: False)())
     depth = db.queue_depth()
-    status = "ok" if running else "degraded"
-    return {"status": status, "depth": depth, "worker_running": running}
+    active = db.count_jobs_by_status("running")
+    failed = db.count_jobs_by_status("failed")
+    dead_letter = db.count_jobs_by_status("dead_letter")
+    status = "ok" if worker_running else "degraded"
+    if active and not worker_running:
+        status = "degraded"
+    return {
+        "status": status,
+        "depth": depth,
+        "worker_running": worker_running,
+        "running": active,
+        "failed": failed,
+        "dead_letter": dead_letter,
+    }
 
 
 def _check_vision() -> dict[str, str | bool]:

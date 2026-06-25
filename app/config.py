@@ -10,7 +10,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 _ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(_ROOT / ".env", override=False)
+# Tests set ARGUS_TESTING=1 in tests/conftest.py before app import so a local
+# deploy .env never pollutes pytest (tokens, homelab hostnames, etc.).
+if os.environ.get("ARGUS_TESTING") != "1":
+    load_dotenv(_ROOT / ".env", override=False)
 
 # Data dir for this service (db, tmp, exports, sidecars)
 DATA_DIR = Path(os.environ.get("ARGUS_DATA_DIR", Path(__file__).resolve().parent.parent / "data"))

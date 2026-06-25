@@ -23,6 +23,7 @@ TOKEN = "ui-test-token"
 
 @pytest.fixture(autouse=True)
 def _queue_off_by_default(monkeypatch):
+    monkeypatch.setattr(config, "API_TOKEN", None)
     monkeypatch.setattr(config, "QUEUE_ENABLED", False)
 
 
@@ -63,6 +64,16 @@ def test_ui_jobs_page_renders():
     r = client.get("/ui/jobs")
     assert r.status_code == 200
     assert "Job queue" in r.text
+    assert 'href="/ui/jobs?status=failed"' in r.text
+
+
+def test_ui_jobs_failed_filter_lists_job():
+    job_id = db.create_job("/tmp/failed-ui", source="ui-failed", model="mock:test")
+    db.update_job(job_id, status="failed", error="worker crash simulation")
+    r = client.get("/ui/jobs?status=failed")
+    assert r.status_code == 200
+    assert "/tmp/failed-ui" in r.text
+    assert "worker crash simulation" not in r.text  # error shown on detail page only
 
 
 def test_ui_job_detail_after_queued_job(sample_image, monkeypatch):
