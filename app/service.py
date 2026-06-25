@@ -545,6 +545,16 @@ class AnalyzeError(Exception):
         self.status_code = status_code
 
 
+def studio_run_urls(*, run_id: int | None = None, job_id: str | None = None) -> dict[str, str]:
+    """Links for Mise admin — vision run review or queued job status."""
+    base = config.PUBLIC_URL.rstrip("/")
+    if run_id:
+        return {"review_url": f"{base}/runs/{run_id}"}
+    if job_id:
+        return {"review_url": f"{base}/ui/jobs/{job_id}"}
+    return {}
+
+
 def perform_folder_analyze(
     *,
     folder: str | None = None,
@@ -623,6 +633,7 @@ def perform_folder_analyze(
             out["project_id"] = project_id
         if client_id:
             out["client_id"] = client_id
+        out.update(studio_run_urls(job_id=job_id))
         return out
 
     result = analyze_folder_run(
@@ -648,4 +659,6 @@ def perform_folder_analyze(
     result["mode"] = "sync"
     if mise_gallery_id is not None and result.get("run_id"):
         mise_dedup.record_done(mise_gallery_id, client_id, int(result["run_id"]))
+    if result.get("run_id"):
+        result.update(studio_run_urls(run_id=int(result["run_id"])))
     return result

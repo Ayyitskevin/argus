@@ -111,6 +111,7 @@ def test_mise_dedup_returns_existing_job(monkeypatch, tmp_path):
 
     assert out["deduped"] is True
     assert out["job_id"] == "job-existing"
+    assert out["review_url"].endswith("/ui/jobs/job-existing")
 
 
 def test_mise_dedup_skipped_when_requested(monkeypatch, tmp_path):

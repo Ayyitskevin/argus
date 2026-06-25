@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import db
+from . import config, db
 
 _ACTIVE = frozenset({"queued", "done"})
 
@@ -26,18 +26,22 @@ def lookup(mise_gallery_id: int, client_id: str | None = None) -> dict[str, Any]
     if client_id:
         out["client_id"] = client_id
     if row["job_id"] and row["status"] == "queued":
+        base = config.PUBLIC_URL.rstrip("/")
         return {
             **out,
             "mode": "queued",
             "job_id": row["job_id"],
             "status": "queued",
+            "review_url": f"{base}/ui/jobs/{row['job_id']}",
         }
     if row["run_id"]:
+        base = config.PUBLIC_URL.rstrip("/")
         return {
             **out,
             "mode": "sync",
             "run_id": row["run_id"],
             "status": "done",
+            "review_url": f"{base}/runs/{row['run_id']}",
         }
     return None
 

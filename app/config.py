@@ -115,6 +115,8 @@ STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY") or None
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET") or None
 STRIPE_PRICE_ID = os.environ.get("STRIPE_PRICE_ID") or None  # subscription price
 SAAS_PUBLIC_URL = os.environ.get("ARGUS_SAAS_PUBLIC_URL", f"http://{HOST}:{PORT}")
+# Base URL for review links returned to Mise admin
+PUBLIC_URL = os.environ.get("ARGUS_PUBLIC_URL", SAAS_PUBLIC_URL).rstrip("/")
 STRIPE_SUCCESS_URL = os.environ.get(
     "STRIPE_SUCCESS_URL",
     f"{SAAS_PUBLIC_URL.rstrip('/')}/ui/saas/billing?success=1",
