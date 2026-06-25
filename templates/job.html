@@ -8,7 +8,7 @@
   </p>
   <div class="small" style="margin-top:.5rem">
     <div><strong>Folder:</strong> {{ job.folder }}</div>
-    <div><strong>Limit:</strong> {{ job.limit_ }} · <strong>Model:</strong> {{ job.model or model }}</div>
+    <div><strong>Limit:</strong> {% if job.limit_ == 0 %}all{% else %}{{ job.limit_ }}{% endif %} · <strong>Model:</strong> {{ job.model or model }}</div>
     {% if job.client_id %}<div><strong>Client:</strong> {{ job.client_id }}</div>{% endif %}
     {% if job.recursive %}<div><strong>Recursive:</strong> yes</div>{% endif %}
     <div><strong>Created:</strong> {{ job.created_at }} · <strong>Updated:</strong> {{ job.updated_at }}</div>

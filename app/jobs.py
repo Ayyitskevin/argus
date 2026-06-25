@@ -125,7 +125,7 @@ def process_job(job: dict) -> None:
             folder=folder,
             source=job.get("source") or str(folder),
             model=job.get("model") or config.VISION_MODEL,
-            limit=job.get("limit_") or 20,
+            limit=service.resolve_analyze_limit(job.get("limit_")),
             project_id=job.get("project_id"),
             write_sidecars=bool(job.get("write_sidecars")),
             sidecar_dir=job.get("sidecar_dir"),

@@ -298,9 +298,32 @@ def validate_job_create(
     return path, None
 
 
+def resolve_analyze_limit(
+    limit: int | None,
+    *,
+    mise: bool = False,
+) -> int | None:
+    """Return max images to analyze, or None for the entire folder.
+
+    Convention: ``0`` or negative means unlimited. ``None`` uses the configured
+    default (``MISE_ARGUS_ANALYZE_LIMIT`` for Mise gallery paths, else
+    ``DEFAULT_ANALYZE_LIMIT``).
+    """
+    if limit is None:
+        limit = config.MISE_ARGUS_ANALYZE_LIMIT if mise else config.DEFAULT_ANALYZE_LIMIT
+    if limit <= 0:
+        return None
+    return limit
+
+
+def limit_for_storage(effective: int | None) -> int:
+    """Persist ``0`` in the jobs table when the effective limit is unlimited."""
+    return effective if effective is not None else 0
+
+
 def _folder_image_list(folder: Path, *, limit: int | None, recursive: bool) -> list[Path]:
     images = vision.collect_folder_images(folder, recursive=recursive)
-    if limit:
+    if limit is not None and limit > 0:
         images = images[:limit]
     return images
 
@@ -337,7 +360,7 @@ def analyze_folder_run(
     folder: Path,
     source: str,
     model: str | None = None,
-    limit: int | None = 20,
+    limit: int | None = None,
     project_id: str | None = None,
     write_sidecars: bool = False,
     sidecar_dir: str | None = None,
@@ -351,7 +374,8 @@ def analyze_folder_run(
     model = model or config.VISION_MODEL
     tenant = tenant or (_tenant_dict(get_tenant_id()))
     tenant_id = tenant["id"] if tenant else None
-    images = _folder_image_list(folder, limit=limit, recursive=recursive)
+    effective_limit = resolve_analyze_limit(limit)
+    images = _folder_image_list(folder, limit=effective_limit, recursive=recursive)
     if not images:
         raise AnalyzeError("no supported images found in folder", 404)
     planned = len(images)
@@ -387,7 +411,7 @@ def analyze_folder_run(
     analyses = vision.analyze_folder(
         folder,
         model=model,
-        limit=limit,
+        limit=effective_limit,
         prefs=prefs,
         recursive=recursive,
         tenant=tenant,
@@ -696,7 +720,7 @@ def perform_folder_analyze(
     *,
     folder: str | None = None,
     model: str | None = None,
-    limit: int = 20,
+    limit: int | None = None,
     write_sidecars: bool = False,
     sidecar_dir: str | None = None,
     mise_gallery_id: int | None = None,
@@ -734,6 +758,8 @@ def perform_folder_analyze(
     project_id = str(mise_project_id) if mise_project_id is not None else None
     source = source_label(path, mise_info=mise_info, client_id=client_id)
     model_name = model or config.VISION_MODEL
+    effective_limit = resolve_analyze_limit(limit, mise=mise_gallery_id is not None)
+    stored_limit = limit_for_storage(effective_limit)
 
     if config.QUEUE_ENABLED:
         ok, reason = queue_accepting_jobs()
@@ -742,7 +768,7 @@ def perform_folder_analyze(
 
         job_id = db.create_job(
             str(path),
-            limit or 20,
+            stored_limit,
             write_sidecars,
             sidecar_dir,
             project_id=project_id,
@@ -761,6 +787,8 @@ def perform_folder_analyze(
             "status": "queued",
             "source": source,
             "recursive": recursive,
+            "limit": stored_limit,
+            "analyze_all": effective_limit is None,
         }
         if callback_url:
             out["callback_url"] = callback_url
@@ -777,7 +805,7 @@ def perform_folder_analyze(
         folder=path,
         source=source,
         model=model_name,
-        limit=limit,
+        limit=effective_limit,
         project_id=project_id,
         write_sidecars=write_sidecars,
         sidecar_dir=sidecar_dir,

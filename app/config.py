@@ -144,6 +144,10 @@ STRIPE_BILLING_PORTAL_RETURN_URL = os.environ.get(
 # If unset, caller must pass explicit folder path to the originals.
 MISE_MEDIA_ROOT = Path(os.environ.get("ARGUS_MISE_MEDIA_ROOT", "")) if os.environ.get("ARGUS_MISE_MEDIA_ROOT") else None
 
+# Folder analyze limits: 0 or negative = entire folder (no cap).
+DEFAULT_ANALYZE_LIMIT = int(os.environ.get("ARGUS_DEFAULT_ANALYZE_LIMIT", "20"))
+MISE_ARGUS_ANALYZE_LIMIT = int(os.environ.get("MISE_ARGUS_ANALYZE_LIMIT", "0"))
+
 # Phase 6 slice 1: read-only Mise gallery index (GET /api/galleries on flow).
 # BOTH url+token arm path resolution via originals_path when ARGUS_MISE_MEDIA_ROOT
 # is unset. Use the same bearer as MISE_ARGUS_TOKEN on the Mise side.

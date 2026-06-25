@@ -142,7 +142,10 @@ def run_all(gallery_id: int, *, vision_limit: int | None = None) -> dict[str, An
     argus_run_id = handoff.get("argus_run_id")
     argus_status = handoff.get("argus_status")
     vision_ran = False
-    limit = vision_limit or int(os.environ.get("MISE_ARGUS_ANALYZE_LIMIT", "5"))
+    limit = service.resolve_analyze_limit(
+        vision_limit,
+        mise=True,
+    )
 
     if argus_status != "done" or not argus_run_id:
         if not (handoff.get("local_media_count") or 0):

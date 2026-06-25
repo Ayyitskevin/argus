@@ -539,7 +539,7 @@ def analyze_folder(
     """Analyze supported images in a folder. Set recursive=True for nested galleries."""
     model = model or config.VISION_MODEL
     images = collect_folder_images(folder, recursive=recursive)
-    if limit:
+    if limit is not None and limit > 0:
         images = images[:limit]
 
     results = []

@@ -78,7 +78,7 @@ class PhotoPatch(BaseModel):
 
 class JobCreate(BaseModel):
     folder: str
-    limit: int = 20
+    limit: int | None = None
     write_sidecars: bool = False
     sidecar_dir: str | None = None
     client_id: str | None = None
@@ -149,7 +149,7 @@ def _enqueue_folder_job(
     path: Path,
     source: str,
     model_name: str,
-    limit: int,
+    limit: int | None,
     write_sidecars: bool,
     sidecar_dir: str | None,
     project_id: str | None,
@@ -158,6 +158,7 @@ def _enqueue_folder_job(
     recursive: bool,
     tenant_id: str | None = None,
     extra: dict | None = None,
+    mise: bool = False,
 ) -> JSONResponse:
     ok, reason = service.queue_accepting_jobs()
     if not ok:
@@ -166,9 +167,11 @@ def _enqueue_folder_job(
     if callback_url and not is_allowed_callback_url(callback_url):
         return error("callback_url must be local or tailnet (http/https)", 400)
 
+    effective_limit = service.resolve_analyze_limit(limit, mise=mise)
+    stored_limit = service.limit_for_storage(effective_limit)
     job_id = db.create_job(
         str(path),
-        limit or 20,
+        stored_limit,
         write_sidecars,
         sidecar_dir,
         project_id=project_id,
@@ -184,6 +187,8 @@ def _enqueue_folder_job(
         "status": "queued",
         "source": source,
         "recursive": recursive,
+        "limit": stored_limit,
+        "analyze_all": effective_limit is None,
     }
     if callback_url:
         response["callback_url"] = callback_url
@@ -383,7 +388,7 @@ async def analyze_single(
 def analyze_folder_endpoint(
     folder: Optional[str] = Form(None),
     model: Optional[str] = Form(None),
-    limit: int = Form(20),
+    limit: Optional[int] = Form(None),
     write_sidecars: bool = Form(False),
     sidecar_dir: Optional[str] = Form(None),
     mise_gallery_id: Optional[int] = Form(None),
@@ -431,7 +436,7 @@ def ui_analyze_folder(
     request: Request,
     folder: Optional[str] = Form(None),
     model: Optional[str] = Form(None),
-    limit: int = Form(20),
+    limit: Optional[int] = Form(None),
     write_sidecars: bool = Form(False),
     sidecar_dir: Optional[str] = Form(None),
     client_id: Optional[str] = Form(None),
@@ -647,7 +652,7 @@ def import_mise_project(
     mise_project_id: int = Form(...),
     gallery_path: Optional[str] = Form(None),
     mise_gallery_id: Optional[int] = Form(None),
-    limit: int = Form(50),
+    limit: Optional[int] = Form(None),
     write_sidecars: bool = Form(False),
     sidecar_dir: Optional[str] = Form(None),
     model: Optional[str] = Form(None),
@@ -670,10 +675,13 @@ def import_mise_project(
     source = service.source_label(path, mise_info=mise_info, client_id=client_id)
     model_name = model or config.VISION_MODEL
 
+    effective_limit = service.resolve_analyze_limit(limit, mise=True)
+    stored_limit = service.limit_for_storage(effective_limit)
+
     if config.QUEUE_ENABLED:
         job_id = db.create_job(
             str(path),
-            limit or 50,
+            stored_limit,
             write_sidecars,
             sidecar_dir,
             project_id=project_id,
@@ -689,13 +697,15 @@ def import_mise_project(
             "mise_project_id": mise_project_id,
             "mise_gallery_id": mise_gallery_id,
             "client_id": client_id,
+            "limit": stored_limit,
+            "analyze_all": effective_limit is None,
         }
 
     result = service.analyze_folder_run(
         folder=path,
         source=source,
         model=model_name,
-        limit=limit,
+        limit=effective_limit,
         project_id=project_id,
         write_sidecars=write_sidecars,
         sidecar_dir=sidecar_dir,
@@ -794,7 +804,7 @@ def ui_pipeline_analyze(gallery_id: int, request: Request, api_token: Optional[s
         result = service.perform_folder_analyze(
             mise_gallery_id=gallery_id,
             client_id="mise",
-            limit=int(os.environ.get("MISE_ARGUS_ANALYZE_LIMIT", "5")),
+            limit=config.MISE_ARGUS_ANALYZE_LIMIT,
             skip_dedup=True,
         )
     except service.AnalyzeError as exc:

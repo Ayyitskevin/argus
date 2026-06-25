@@ -32,7 +32,7 @@
       <tr style="border-bottom:1px solid #f0ede6">
         <td style="padding:.45rem .4rem"><span class="badge">{{ j.status }}</span></td>
         <td style="word-break:break-all">{{ j.folder }}</td>
-        <td>{{ j.limit_ }}</td>
+        <td>{% if j.limit_ == 0 %}all{% else %}{{ j.limit_ }}{% endif %}</td>
         <td class="small">{{ j.created_at }}</td>
         <td><a href="/ui/jobs/{{ j.id }}">view</a></td>
       </tr>
