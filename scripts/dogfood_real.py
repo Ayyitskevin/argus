@@ -24,14 +24,15 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("ARGUS_VISION_BACKEND", "grok")
 
 from app import config  # noqa: E402
-from app.service import analyze_folder_run  # noqa: E402
+from app.service import analyze_folder_estimate, analyze_folder_run  # noqa: E402
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Argus real-vision dogfood")
     parser.add_argument("folder", type=Path)
-    parser.add_argument("--limit", type=int, default=5)
+    parser.add_argument("--limit", type=int, default=5, help="0 = entire folder")
     parser.add_argument("--client-id", default="dogfood")
+    parser.add_argument("--style", default=None, help="f_and_b, events, or portrait")
     parser.add_argument("--recursive", action="store_true")
     parser.add_argument(
         "--data-dir",
@@ -57,14 +58,25 @@ def main() -> int:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     print(f"Backend: {config.VISION_BACKEND} model={config.VISION_MODEL}", flush=True)
+    effective_limit = None if args.limit <= 0 else args.limit
+    estimate = analyze_folder_estimate(folder, limit=effective_limit, recursive=args.recursive)
     print(f"Folder: {folder} limit={args.limit} recursive={args.recursive}", flush=True)
+    if estimate.get("estimated_cost_usd") is not None:
+        print(
+            f"Estimate: {estimate.get('image_count')} images, "
+            f"~${estimate['estimated_cost_usd']:.2f}",
+            flush=True,
+        )
+    if args.style:
+        print(f"Style: {args.style}", flush=True)
     started = time.time()
     result = analyze_folder_run(
         folder=folder,
         source=f"client:{args.client_id}|dogfood:{folder}",
-        limit=args.limit,
+        limit=effective_limit,
         client_id=args.client_id,
         recursive=args.recursive,
+        style=args.style,
     )
     elapsed = time.time() - started
 

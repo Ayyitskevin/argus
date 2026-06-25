@@ -1,11 +1,16 @@
 {
   "examples": [
     "Keeper 0.95 hero_plate: seared scallop with golden-brown crust, microgreen garnish, brown butter sauce — rim lighting, shallow DOF, asymmetric composition; notes flag any blown highlights or messy plate edge.",
+    "Keeper 0.92 hero_plate: burrata with heirloom tomatoes, basil oil drizzle, cracked black pepper — soft window light, white plate negative space; menu-cover hero candidate.",
     "Keeper 0.90 detail_texture: cocktail with blood orange wheel and thyme sprig — bokeh bar background, diagonal composition; penalize plastic-looking garnish or flat fill light.",
     "Keeper 0.88 hero_plate: seared salmon fillet with pineapple salsa, glossy dark reduction, wilted greens — shallow DOF, bokeh wine glasses; hero for menu or website cover.",
     "Keeper 0.85 environmental_medium: chef plating at pass with steam rising, warm tungsten kitchen glow — candid energy, hands in frame acceptable if story is strong.",
+    "Keeper 0.82 wide_establishing: dining room at golden hour, pendant lights, occupied tables with depth — establish venue mood; penalize empty dead room or mixed white balance.",
+    "Keeper 0.78 candid_moment: guests toasting wine glasses, laughter, shallow DOF on hands — authentic event energy; not a posed grip-and-grin.",
     "Keeper 0.75 overhead_flatlay: shared table spread with shared plates, cutlery rhythm, negative space — even top-down light, penalize cluttered edges or mixed color temps.",
+    "Keeper 0.55 other: usable B-roll of signage or decor without a clear food hero — secondary album filler only, not delivery anchor.",
     "Keeper 0.15 other: soft-focus throwaway test frame, motion blur, or duplicate angle of a stronger keeper — low story value even if technically acceptable.",
+    "Keeper 0.08 other: back-of-camera LCD review shot, export dialog, or Lightroom grid — NOT deliverable photography.",
     "Keeper 0.05–0.10 other: web UI screenshot, design mockup, placeholder gradient, or video file thumbnail — NOT camera-original work; keywords must not invent food subjects; keeper_score must stay near zero."
   ]
 }

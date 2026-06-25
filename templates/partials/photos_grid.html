@@ -18,7 +18,22 @@
       {% endfor %}
       {% if not p.keywords %}<span class="small">(no tags)</span>{% endif %}
     </div>
-    <div class="small"><strong>Alt:</strong> {{ p.alt_text or '—' }}</div>
+    <div class="small"><strong>Alt:</strong> <span class="copy-alt">{{ p.alt_text or '—' }}</span></div>
+    {% if p.description %}
+    <div class="small photo-desc"><strong>Note:</strong> {{ p.description[:200] }}{% if p.description|length > 200 %}…{% endif %}</div>
+    {% endif %}
+    {% set iptc = p.suggested_iptc or {} %}
+    {% if iptc.get('caption') %}
+    <div class="small copy-caption-src" style="display:none">{{ iptc.caption }}</div>
+    <div class="small"><strong>Caption:</strong> {{ iptc.caption[:160] }}{% if iptc.caption|length > 160 %}…{% endif %}</div>
+    {% endif %}
+    <div class="copy-row">
+      <button type="button" class="secondary copy-btn" data-copy-target=".copy-alt" data-label="alt">Copy alt</button>
+      <button type="button" class="secondary copy-btn" data-copy-from="keywords">Copy keywords</button>
+      {% if iptc.get('caption') %}
+      <button type="button" class="secondary copy-btn" data-copy-target=".copy-caption-src">Copy caption</button>
+      {% endif %}
+    </div>
 
     <div class="edit-row" data-run-id="{{ run.id }}" data-photo-id="{{ p.id }}">
       <input type="text" class="kw-input" placeholder="keywords (comma-separated)" value="{{ (p.keywords or [])|join(', ') }}">

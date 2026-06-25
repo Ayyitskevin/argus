@@ -59,6 +59,16 @@ def result_to_dict(result: Any) -> dict:
     return dict(result)
 
 
+def prefs_for_run(client_id: str | None, *, style: str | None = None) -> dict | None:
+    """Load client prefs and optionally attach a vision style suffix key."""
+    prefs = load_preferences(client_id)
+    if not style:
+        return prefs
+    merged = dict(prefs or {})
+    merged["style"] = style.strip()
+    return merged
+
+
 def load_preferences(client_id: str | None) -> dict | None:
     """Load explicit prefs and merge history-derived nudges (Phase 4)."""
     if not client_id:
@@ -431,6 +441,7 @@ def analyze_folder_run(
     recursive: bool = False,
     tenant: dict | None = None,
     job_id: str | None = None,
+    style: str | None = None,
 ) -> dict:
     """Analyze and persist a folder synchronously (incremental when job_id set)."""
     assert_path_within_media_roots(Path(folder))
@@ -454,6 +465,8 @@ def analyze_folder_run(
         except XaiBudgetError as exc:
             raise AnalyzeError(str(exc), 402) from exc
 
+    prefs = prefs_for_run(client_id, style=style)
+
     if job_id and images:
         return _analyze_folder_incremental(
             folder=folder,
@@ -468,9 +481,8 @@ def analyze_folder_run(
             tenant=tenant,
             tenant_id=tenant_id,
             job_id=job_id,
+            prefs=prefs,
         )
-
-    prefs = load_preferences(client_id)
     analyses = vision.analyze_folder(
         folder,
         model=model,
@@ -513,11 +525,12 @@ def _analyze_folder_incremental(
     tenant: dict | None,
     tenant_id: str | None,
     job_id: str,
+    prefs: dict | None = None,
 ) -> dict:
     """Analyze one image at a time so queued jobs expose live progress."""
     import os
 
-    prefs = load_preferences(client_id)
+    prefs = prefs if prefs is not None else load_preferences(client_id)
     job_row = db.get_job(job_id, tenant_id=db.GLOBAL_SCOPE) or {}
     existing_run_id = job_row.get("run_id")
     done_basenames: set[str] = set()

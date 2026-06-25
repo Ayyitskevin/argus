@@ -112,12 +112,18 @@
     .hero-card img { width: 100%; height: 110px; object-fit: cover; display: block; background: var(--thumb-bg); }
     .hero-card .hero-meta { padding: .4rem .5rem; font-size: .75rem; }
     .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
+    .photo-grid.layout-side { grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); }
     .photo {
       border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--card);
       display: grid; grid-template-columns: 120px 1fr;
     }
+    .photo-grid.layout-side .photo { grid-template-columns: 200px 1fr; }
     .photo-thumb { background: var(--thumb-bg); min-height: 120px; }
+    .photo-grid.layout-side .photo-thumb { min-height: 200px; }
     .photo-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; min-height: 120px; }
+    .photo-grid.layout-side .photo-thumb img { min-height: 200px; }
+    .copy-row { display: flex; flex-wrap: wrap; gap: .3rem; margin: .35rem 0; }
+    .copy-row button { font-size: .72rem; padding: .2rem .45rem; }
     .photo-body { padding: .65rem .75rem; font-size: .86rem; }
     .photo-title { font-weight: 600; font-size: .82rem; margin-bottom: .25rem; word-break: break-all; }
     .edit-row { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .5rem; align-items: center; }

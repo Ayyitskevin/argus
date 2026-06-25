@@ -63,6 +63,7 @@
     <a class="btn secondary" href="/runs/{{ run.id }}?sort=keeper&min_keeper=0.15">Hide rejected</a>
     <a class="btn secondary" href="/runs/{{ run.id }}?sort=hero">Hero picks</a>
     <a class="btn secondary" href="/runs/{{ run.id }}">Clear filters</a>
+    <button type="button" class="secondary" id="layout-toggle">Side-by-side</button>
   </div>
   <form class="toolbar"
         hx-get="/runs/{{ run.id }}/photos-grid"
@@ -208,6 +209,45 @@
   });
   document.getElementById("bulk-reject").addEventListener("click", function () { bulkKeeper(0); });
   document.getElementById("bulk-pick").addEventListener("click", function () { bulkKeeper(1); });
+
+  var grid = document.getElementById("photo-grid");
+  var layoutBtn = document.getElementById("layout-toggle");
+  function applyLayout(side) {
+    if (!grid || !layoutBtn) return;
+    grid.classList.toggle("layout-side", side);
+    layoutBtn.textContent = side ? "Compact grid" : "Side-by-side";
+    try { localStorage.setItem("argus-cull-layout", side ? "side" : "compact"); } catch (e) {}
+  }
+  if (layoutBtn) {
+    var saved = "";
+    try { saved = localStorage.getItem("argus-cull-layout") || ""; } catch (e) {}
+    applyLayout(saved === "side");
+    layoutBtn.addEventListener("click", function () {
+      applyLayout(!grid.classList.contains("layout-side"));
+    });
+  }
+
+  function copyFromCard(btn) {
+    var card = btn.closest(".photo-card");
+    if (!card) return;
+    var text = "";
+    if (btn.dataset.copyFrom === "keywords") {
+      text = (card.querySelector(".kw-input") || {}).value || "";
+    } else {
+      var sel = btn.dataset.copyTarget;
+      var el = sel ? card.querySelector(sel) : null;
+      text = el ? (el.textContent || "").trim() : "";
+    }
+    if (!text || text === "—") return;
+    navigator.clipboard.writeText(text).then(function () {
+      var prev = btn.textContent;
+      btn.textContent = "Copied";
+      setTimeout(function () { btn.textContent = prev; }, 900);
+    }).catch(function () {});
+  }
+  document.getElementById("photo-grid").addEventListener("click", function (ev) {
+    if (ev.target.classList.contains("copy-btn")) copyFromCard(ev.target);
+  });
   document.addEventListener("keydown", async function (ev) {
     if (ev.target && (ev.target.tagName === "INPUT" || ev.target.tagName === "TEXTAREA" || ev.target.tagName === "SELECT")) return;
     const list = photos();

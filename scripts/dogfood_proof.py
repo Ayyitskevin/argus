@@ -4,7 +4,8 @@
 No image generation. Uses existing photos on disk.
 
 Usage:
-    ARGUS_VISION_BACKEND=grok python scripts/dogfood_proof.py [folder] --limit 2
+    ARGUS_VISION_BACKEND=grok python scripts/dogfood_proof.py [folder] --limit 0
+    # limit 0 = entire folder; --style f_and_b applies client style suffix
 
 Writes a JSON report under ARGUS_DATA_DIR and prints a human checklist.
 Exit 0 when all gates pass, 2 when vision/API fails, 1 on config errors.
@@ -26,7 +27,7 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("ARGUS_VISION_BACKEND", "grok")
 
 from app import config  # noqa: E402
-from app.service import analyze_folder_run  # noqa: E402
+from app.service import analyze_folder_estimate, analyze_folder_run  # noqa: E402
 from app.vision import analyze_image  # noqa: E402
 
 
@@ -44,13 +45,17 @@ def _default_folder() -> Path:
 def _photo_summary(photo: dict) -> dict:
     culling = photo.get("culling") or {}
     keywords = photo.get("keywords") or []
+    model = str(photo.get("model") or "")
+    prefiltered = model.startswith("prefilter:")
+    degenerate = not prefiltered and (not keywords or keywords == ["analysis-failed"])
     return {
         "path": Path(photo.get("image_path", "")).name,
         "shot_type": photo.get("shot_type"),
         "keeper": culling.get("keeper_score"),
         "hero": culling.get("hero_potential"),
         "keyword_count": len(keywords),
-        "degenerate": not keywords or keywords == ["analysis-failed"],
+        "prefiltered": prefiltered,
+        "degenerate": degenerate,
         "sample_keywords": keywords[:4],
         "notes": (culling.get("notes") or "")[:160],
     }
@@ -62,12 +67,16 @@ def _gate_checks(photos: list[dict]) -> list[dict]:
         gates.append({"id": "has_photos", "pass": False, "detail": "no photos analyzed"})
         return gates
 
-    degenerate = sum(1 for p in photos if _photo_summary(p)["degenerate"])
-    rate = degenerate / len(photos)
+    summaries = [_photo_summary(p) for p in photos]
+    vision_count = sum(1 for s in summaries if not s["prefiltered"])
+    degenerate = sum(1 for s in summaries if s["degenerate"])
+    rate = degenerate / vision_count if vision_count else 0.0
+    prefiltered = sum(1 for s in summaries if s["prefiltered"])
     gates.append({
         "id": "degenerate_rate",
         "pass": rate < 0.1,
-        "detail": f"{degenerate}/{len(photos)} degenerate ({rate:.0%})",
+        "detail": f"{degenerate}/{vision_count} vision degenerate ({rate:.0%})"
+        + (f", {prefiltered} prefiltered" if prefiltered else ""),
     })
 
     avg_keeper = sum(
@@ -113,8 +122,18 @@ def run_smoke(image: Path) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Argus Grok proof ladder")
     parser.add_argument("folder", nargs="?", type=Path, help="folder to dogfood")
-    parser.add_argument("--limit", type=int, default=2)
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=2,
+        help="max images (0 = entire folder)",
+    )
     parser.add_argument("--client-id", default="proof")
+    parser.add_argument(
+        "--style",
+        default=None,
+        help="client style suffix for vision prompts (f_and_b, events, portrait)",
+    )
     parser.add_argument("--skip-smoke", action="store_true")
     parser.add_argument("--data-dir", default=None)
     args = parser.parse_args()
@@ -151,7 +170,20 @@ def main() -> int:
         return 1
 
     print(f"Proof ladder: backend=grok model={config.VISION_MODEL}", flush=True)
+    effective_limit = None if args.limit <= 0 else args.limit
+    estimate = analyze_folder_estimate(folder, limit=effective_limit)
     print(f"Folder: {folder} limit={args.limit}", flush=True)
+    print(
+        f"Estimate: {estimate.get('image_count', 0)} images"
+        + (
+            f", ~${estimate['estimated_cost_usd']:.2f} Grok"
+            if estimate.get("estimated_cost_usd") is not None
+            else ""
+        ),
+        flush=True,
+    )
+    if args.style:
+        print(f"Style: {args.style}", flush=True)
 
     if not args.skip_smoke:
         print("Step 1/2: grok_smoke.py …", flush=True)
@@ -171,8 +203,9 @@ def main() -> int:
         result = analyze_folder_run(
             folder=folder,
             source=f"client:{args.client_id}|proof:{folder}",
-            limit=args.limit,
+            limit=effective_limit,
             client_id=args.client_id,
+            style=args.style,
         )
     except Exception as exc:
         report["steps"].append({"name": "dogfood", "pass": False, "error": str(exc)})
