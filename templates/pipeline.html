@@ -37,7 +37,16 @@
   <p class="small">
     {{ counts.published }} published · {{ counts.media_synced }} synced locally ·
     {{ counts.argus_done }} vision done · {{ counts.plutus_done }} upsell done
+    {% if vision_concurrency and vision_concurrency > 1 %}
+    · {{ vision_concurrency }} parallel vision calls/job
+    {% endif %}
   </p>
+  {% if xai_budget and xai_budget.enabled %}
+  <p class="small" style="margin:.35rem 0 0">
+    Grok budget today: <strong>${{ '%.2f'|format(xai_budget.spent_usd) }}</strong> / ${{ '%.2f'|format(xai_budget.cap_usd) }}
+    (${{ '%.2f'|format(xai_budget.remaining_usd) }} left)
+  </p>
+  {% endif %}
   {% if pipeline_message %}<p class="status-ok">{{ pipeline_message }}</p>{% endif %}
   {% if request.query_params.get('review_url') or request.query_params.get('pitch_url') %}
   <p class="small" style="margin:.5rem 0 0">

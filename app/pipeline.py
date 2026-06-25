@@ -74,8 +74,11 @@ def gallery_rows(*, published: bool = True) -> list[dict[str, Any]]:
 
 
 def pipeline_snapshot() -> dict[str, Any]:
+    from .xai_budget import today_snapshot
+
     checks = service_checks()
     galleries = gallery_rows()
+    xai_budget = today_snapshot()
     synced = sum(1 for g in galleries if (g.get("local_media_count") or 0) > 0)
     vision_done = sum(1 for g in galleries if g.get("argus_status") == "done")
     plutus_done = sum(1 for g in galleries if g.get("plutus_status") == "done")
@@ -98,6 +101,8 @@ def pipeline_snapshot() -> dict[str, Any]:
             "plutus_auto": plutus_client.is_enabled(),
             "plutus_mise_admin": bool(config.PLUTUS_URL),
         },
+        "xai_budget": xai_budget,
+        "vision_concurrency": config.VISION_CONCURRENCY,
     }
 
 

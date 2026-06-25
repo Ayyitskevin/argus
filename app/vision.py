@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,22 @@ from pydantic import BaseModel, Field
 from . import config, metrics, structured_log
 from .image_io import prepare_jpeg_bytes, thumbnail_jpeg_bytes
 from .grok_client import GrokVisionError, chat_vision, message_json_text, parse_usage
+from .vision_prefilter import detect_non_photo
+
+STYLE_PROMPT_SUFFIXES: dict[str, str] = {
+    "f_and_b": (
+        "Client style: food & beverage and restaurant photography. Prioritize plating, "
+        "steam, texture, bar cocktails, and environmental dining scenes."
+    ),
+    "events": (
+        "Client style: event and candid coverage. Prioritize emotional moments, "
+        "guest interaction, and venue atmosphere over static detail shots."
+    ),
+    "portrait": (
+        "Client style: portrait and subject-focused work. Prioritize expression, "
+        "connection, and clean backgrounds."
+    ),
+}
 
 
 class Culling(BaseModel):
@@ -164,6 +181,48 @@ def system_prompt() -> str:
     """System prompt with optional on-disk few-shot examples."""
     extra = load_prompt_examples()
     return SYSTEM_PROMPT + extra if extra else SYSTEM_PROMPT
+
+
+def style_prompt_suffix(prefs: dict | None) -> str:
+    """Optional per-client style block from prefs JSON (``style`` or ``client_style``)."""
+    if not prefs:
+        return ""
+    raw = (prefs.get("style") or prefs.get("client_style") or "").strip().lower()
+    if not raw:
+        return ""
+    mapped = STYLE_PROMPT_SUFFIXES.get(raw.replace(" ", "_").replace("-", "_"))
+    if mapped:
+        return mapped
+    return f"Client style preference: {raw}."
+
+
+def _prefiltered_result(
+    image_path: str | Path,
+    *,
+    width: int | None,
+    height: int | None,
+    reason: str,
+    model: str,
+) -> AnalysisResult:
+    name = Path(image_path).name
+    return AnalysisResult(
+        image_path=str(image_path),
+        width=width,
+        height=height,
+        shot_type="other",
+        keywords=["non-photographic", "prefiltered"],
+        culling=Culling(
+            keeper_score=0.05,
+            hero_potential=0.02,
+            technical_quality="poor",
+            notes=f"Pre-filtered without vision API: {reason}",
+        ),
+        alt_text=f"Non-photographic file: {name}",
+        description="Skipped vision analysis — likely screenshot, UI asset, or non-camera file.",
+        suggested_iptc={"headline": name, "caption": reason, "keywords": ["non-photographic"]},
+        raw_response=json.dumps({"prefiltered": True, "reason": reason}),
+        model=f"prefilter:{model}",
+    )
 
 
 def make_thumbnail(path: str | Path, max_side: int = 512) -> bytes:
@@ -321,6 +380,23 @@ def analyze_image(
     model = model or config.VISION_MODEL
     img_bytes, (width, height) = _prepare_image(image_path)
 
+    if config.VISION_PREFILTER_ENABLED:
+        is_junk, reason = detect_non_photo(image_path, width=width, height=height)
+        if is_junk:
+            metrics.inc("vision_prefiltered")
+            result = _apply_prefs(
+                _prefiltered_result(
+                    image_path,
+                    width=width,
+                    height=height,
+                    reason=reason,
+                    model=model,
+                ),
+                prefs,
+            )
+            _log_image_analyzed(image_path=image_path, model=model, result=result, started=started)
+            return result
+
     if config.SAAS_MODE:
         from .auth_context import get_auth_context
         from . import cloud_vision, metering
@@ -417,6 +493,9 @@ def analyze_image(
 
     b64 = base64.b64encode(img_bytes).decode("utf-8")
     user_prompt = USER_PROMPT_TEMPLATE.format(max_tags=config.DEFAULT_MAX_TAGS)
+    style_suffix = style_prompt_suffix(prefs)
+    if style_suffix:
+        user_prompt = f"{user_prompt}\n\n{style_suffix}"
 
     try:
         def _chat_and_parse(extra_hint: str = "", *, temperature: float = 0.2) -> dict:
@@ -528,6 +607,44 @@ def collect_folder_images(folder: str | Path, *, recursive: bool = False) -> lis
     return sorted(images)
 
 
+def analyze_images_parallel(
+    images: list[Path],
+    *,
+    model: str | None = None,
+    prefs: dict | None = None,
+    tenant: dict | None = None,
+    max_workers: int | None = None,
+) -> list[AnalysisResult]:
+    """Analyze a list of paths with bounded parallelism (order preserved)."""
+    if not images:
+        return []
+    model = model or config.VISION_MODEL
+    workers = max(1, min(max_workers or config.VISION_CONCURRENCY, len(images)))
+    if workers == 1:
+        out: list[AnalysisResult] = []
+        for img in images:
+            try:
+                out.append(analyze_image(img, model=model, prefs=prefs, tenant=tenant))
+            except Exception as exc:
+                log.error("skipping %s: %s", img, exc)
+        return out
+
+    ordered: list[AnalysisResult | None] = [None] * len(images)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {
+            pool.submit(analyze_image, img, model=model, prefs=prefs, tenant=tenant): idx
+            for idx, img in enumerate(images)
+        }
+        for future in as_completed(futures):
+            idx = futures[future]
+            img = images[idx]
+            try:
+                ordered[idx] = future.result()
+            except Exception as exc:
+                log.error("skipping %s: %s", img, exc)
+    return [item for item in ordered if item is not None]
+
+
 def analyze_folder(
     folder: str | Path,
     model: str | None = None,
@@ -541,12 +658,4 @@ def analyze_folder(
     images = collect_folder_images(folder, recursive=recursive)
     if limit is not None and limit > 0:
         images = images[:limit]
-
-    results = []
-    for img in images:
-        try:
-            res = analyze_image(img, model=model, prefs=prefs, tenant=tenant)
-            results.append(res)
-        except Exception as e:
-            log.error("skipping %s: %s", img, e)
-    return results
+    return analyze_images_parallel(images, model=model, prefs=prefs, tenant=tenant)

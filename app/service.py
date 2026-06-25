@@ -321,6 +321,30 @@ def limit_for_storage(effective: int | None) -> int:
     return effective if effective is not None else 0
 
 
+def estimate_for_job(job: dict) -> dict[str, Any] | None:
+    """Best-effort preflight for a queued/running job row."""
+    folder = job.get("folder")
+    if not folder:
+        return None
+    path = Path(str(folder)).expanduser()
+    if not path.is_dir():
+        return None
+    from . import mise_dedup
+
+    limit_val = job.get("limit_")
+    limit_arg: int | None
+    if limit_val is None:
+        limit_arg = None
+    else:
+        limit_arg = int(limit_val)
+    return analyze_folder_estimate(
+        path,
+        limit=limit_arg,
+        mise=mise_dedup.parse_mise_gallery_id(job.get("source")) is not None,
+        recursive=bool(job.get("recursive")),
+    )
+
+
 def analyze_folder_estimate(
     folder: Path,
     *,
@@ -542,39 +566,46 @@ def _analyze_folder_incremental(
     if existing_run_id:
         photos.extend(_photos_for_run(run_id))
 
-    for index, image_path in enumerate(pending):
-        db.update_job_progress(
-            job_id,
-            done=done_count + index,
-            total=total,
-            run_id=run_id,
-            current_file=image_path.name,
-        )
+    batch_size = max(1, config.VISION_CONCURRENCY)
+    processed = 0
+    for batch_start in range(0, len(pending), batch_size):
+        batch = pending[batch_start : batch_start + batch_size]
+        if batch:
+            db.update_job_progress(
+                job_id,
+                done=done_count + processed,
+                total=total,
+                run_id=run_id,
+                current_file=batch[0].name,
+            )
         try:
-            analysis = vision.analyze_image(
-                image_path,
+            batch_results = vision.analyze_images_parallel(
+                batch,
                 model=model,
                 prefs=prefs,
                 tenant=tenant,
             )
         except Exception as exc:
-            log.error("skipping %s: %s", image_path, exc)
-            continue
-        analyses.append(analysis)
-        data = result_to_dict(analysis)
-        db.save_photo_analysis(run_id, data)
-        photos.append(data)
-        if write_sidecars:
-            written = write_sidecar(data["image_path"], data, sidecar_dir=sidecar_dir)
-            sidecars_written.extend(str(path) for path in written.values())
-        db.set_run_photo_count(run_id, len(photos))
-        db.update_job_progress(
-            job_id,
-            done=done_count + index + 1,
-            total=total,
-            run_id=run_id,
-            current_file=image_path.name,
-        )
+            log.error("batch analyze failed at %s: %s", batch_start, exc)
+            batch_results = []
+
+        for image_path, analysis in zip(batch, batch_results):
+            analyses.append(analysis)
+            data = result_to_dict(analysis)
+            db.save_photo_analysis(run_id, data)
+            photos.append(data)
+            if write_sidecars:
+                written = write_sidecar(data["image_path"], data, sidecar_dir=sidecar_dir)
+                sidecars_written.extend(str(path) for path in written.values())
+            processed += 1
+            db.set_run_photo_count(run_id, len(photos))
+            db.update_job_progress(
+                job_id,
+                done=done_count + processed,
+                total=total,
+                run_id=run_id,
+                current_file=image_path.name,
+            )
 
     _raise_if_all_failed(analyses)
     failed_count = sum(1 for a in analyses if getattr(a, "analysis_failed", False))

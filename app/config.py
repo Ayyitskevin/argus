@@ -53,6 +53,9 @@ VISION_BACKEND = "grok" if _raw_backend == "real" else _raw_backend  # "real" al
 SERVICE_MODE = os.environ.get("ARGUS_SERVICE_MODE", "standalone").lower()  # standalone | odysseus-style
 QUEUE_ENABLED = os.environ.get("ARGUS_QUEUE_ENABLED", "true").lower() == "true"
 MAX_CONCURRENT_JOBS = int(os.environ.get("ARGUS_MAX_CONCURRENT_JOBS", "2"))
+# Parallel Grok/mock calls within one folder job (1 = sequential).
+VISION_CONCURRENCY = max(1, int(os.environ.get("ARGUS_VISION_CONCURRENCY", "2")))
+VISION_PREFILTER_ENABLED = os.environ.get("ARGUS_VISION_PREFILTER_ENABLED", "true").lower() == "true"
 MAX_QUEUE_DEPTH = int(os.environ.get("ARGUS_MAX_QUEUE_DEPTH", "100"))
 JOB_MAX_RETRIES = int(os.environ.get("ARGUS_JOB_MAX_RETRIES", "1"))
 JOB_RETENTION_DAYS = int(os.environ.get("ARGUS_JOB_RETENTION_DAYS", "90"))

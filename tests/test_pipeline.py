@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -13,7 +14,7 @@ os.environ["ARGUS_VISION_BACKEND"] = "mock"
 os.environ["ARGUS_QUEUE_ENABLED"] = "false"
 os.environ["ARGUS_DATA_DIR"] = _TMP
 
-from app import config, pipeline  # noqa: E402
+from app import config, db, pipeline  # noqa: E402
 from app.main import app  # noqa: E402
 
 client = TestClient(app)
@@ -29,6 +30,10 @@ def _reset(monkeypatch):
     monkeypatch.setattr(config, "PLUTUS_URL", "")
     monkeypatch.setattr(config, "PLUTUS_PUBLIC_URL", "")
     monkeypatch.setattr(config, "PLUTUS_TOKEN", "")
+    monkeypatch.setattr(config, "DATA_DIR", Path(_TMP))
+    monkeypatch.setattr(config, "DB_PATH", Path(_TMP) / "argus.db")
+    db._SCHEMA_READY = False
+    db.init()
     yield
 
 

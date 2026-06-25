@@ -13,7 +13,7 @@ return {
         propertyTable.base_url = prefs.base_url or "http://127.0.0.1:8010"
         propertyTable.api_token = prefs.api_token or ""
         propertyTable.client_id = prefs.client_id or ""
-        propertyTable.limit = prefs.limit or 20
+        propertyTable.limit = prefs.limit or 0
         propertyTable.recursive = prefs.recursive or false
 
         return {

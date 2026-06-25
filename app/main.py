@@ -603,10 +603,17 @@ def ui_job_detail(request: Request, job_id: str):
     progress = parse_job_progress(job)
     if progress and progress.get("run_id"):
         run_id = progress["run_id"]
+    job_estimate = service.estimate_for_job(job)
     return templates.TemplateResponse(
         request,
         "job.html",
-        _ui_context(job=job, job_result=result, run_id=run_id, progress=progress),
+        _ui_context(
+            job=job,
+            job_result=result,
+            run_id=run_id,
+            progress=progress,
+            job_estimate=job_estimate,
+        ),
     )
 
 
@@ -789,6 +796,8 @@ def ui_pipeline(request: Request):
             counts=snap["counts"],
             urls=snap["urls"],
             handoff=snap["handoff"],
+            xai_budget=snap.get("xai_budget"),
+            vision_concurrency=snap.get("vision_concurrency"),
             pipeline_message=msg,
             pipeline_error=err,
         ),

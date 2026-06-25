@@ -12,6 +12,21 @@
     {% if job.client_id %}<div><strong>Client:</strong> {{ job.client_id }}</div>{% endif %}
     {% if job.recursive %}<div><strong>Recursive:</strong> yes</div>{% endif %}
     <div><strong>Created:</strong> {{ job.created_at }} · <strong>Updated:</strong> {{ job.updated_at }}</div>
+    {% if job_estimate and job_estimate.image_count %}
+    <div style="margin-top:.45rem">
+      <strong>Estimate:</strong> {{ job_estimate.image_count }} photo{{ '' if job_estimate.image_count == 1 else 's' }}
+      {% if job_estimate.analyze_all %} (full folder){% endif %}
+      {% if job_estimate.get('estimated_cost_usd') is not none %}
+      · ~${{ '%.2f'|format(job_estimate.get('estimated_cost_usd')) }} Grok
+      {% if job_estimate.get('budget') and job_estimate.budget.get('enabled') %}
+      · budget ${{ '%.2f'|format(job_estimate.budget.get('remaining_usd') or 0) }} left today
+      {% if job_estimate.get('budget_ok') is sameas false %}
+      <span class="status-err">over daily cap</span>
+      {% endif %}
+      {% endif %}
+      {% endif %}
+    </div>
+    {% endif %}
   </div>
   {% if job.error %}
   <pre style="margin-top:.75rem; color:var(--err)">{{ job.error }}</pre>
