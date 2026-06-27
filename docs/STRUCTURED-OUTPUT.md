@@ -57,6 +57,7 @@ ledger and `/admin/ai-cost` report consume:
   "provider": "argus-grok",
   "gallery_id": 42,
   "run_id": 123,
+  "idempotency_key": "argus-g42-r123",
   "status": "done",
   "photos": [ ... ],
   "cost_usd": 0.0246,
@@ -65,6 +66,9 @@ ledger and `/admin/ai-cost` report consume:
 }
 ```
 
+- `idempotency_key` is stable per (gallery, run) and also sent as an
+  `Idempotency-Key` header, so Mise/Argus dedupe re-deliveries. `status` is always
+  `queued|done|error`. See [`CALLBACK-CONTRACT.md`](CALLBACK-CONTRACT.md).
 - `cost_usd` = sum of per-image spend (real Grok/cloud usage; simulated in mock/CI).
 - `latency_ms` = sum of per-image inference time. **Summed, not wall-clock**, so it
   is deterministic and reproduces exactly on an idempotent re-emit.

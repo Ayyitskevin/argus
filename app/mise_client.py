@@ -68,6 +68,16 @@ def get_gallery(gallery_id: int) -> dict[str, Any] | None:
     return None
 
 
+def _callback_headers(payload: dict[str, Any]) -> dict[str, str]:
+    """Bearer + an Idempotency-Key mirror of the payload key, so Mise can dedupe
+    re-deliveries at the HTTP layer without parsing the body."""
+    headers = _headers()
+    key = payload.get("idempotency_key")
+    if key:
+        headers["Idempotency-Key"] = str(key)
+    return headers
+
+
 def _post_argus_callback(gallery_id: int, payload: dict[str, Any]) -> None:
     """Blocking POST of a structured-output payload to Mise (best-effort)."""
     url = f"{config.MISE_URL}/api/argus/callback"
@@ -77,7 +87,7 @@ def _post_argus_callback(gallery_id: int, payload: dict[str, Any]) -> None:
                 url,
                 params={"gallery_id": gallery_id},
                 json=payload,
-                headers=_headers(),
+                headers=_callback_headers(payload),
                 follow_redirects=False,
             )
     except httpx.RequestError as exc:

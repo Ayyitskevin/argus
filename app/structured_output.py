@@ -22,6 +22,27 @@ from . import config
 
 MICRO_PER_USD = 1_000_000
 
+# Status semantics Mise records as the run's last state. A callback always carries
+# exactly one of these so Mise's status is never ambiguous.
+CALLBACK_STATUSES = frozenset({"queued", "done", "error"})
+
+
+def idempotency_key(gallery_id: int, run_id: int) -> str:
+    """Stable dedupe key for a (gallery, run) callback.
+
+    Identical across retries and re-deliveries (same run → same key), and across
+    re-analyses of an unchanged gallery (the mise_dedup run cache returns the same
+    run_id). A *changed* gallery yields a new run → new run_id → new key, i.e. a
+    genuinely new logical result. Mise no-ops a key it has already applied;
+    Argus's own dead-letter/re-delivery store is keyed on it too."""
+    return f"argus-g{int(gallery_id)}-r{int(run_id)}"
+
+
+def normalize_status(status: str | None) -> str:
+    """Coerce to one of the contract statuses (queued|done|error)."""
+    value = (status or "done").strip().lower()
+    return value if value in CALLBACK_STATUSES else "done"
+
 
 def _clamp_score(value: Any) -> float | None:
     """Coerce a culling score into a [0,1] float, or None when absent/unusable.
@@ -153,7 +174,9 @@ def build_callback_payload(
         "provider": provider or config.STRUCTURED_PROVIDER,
         "gallery_id": gallery_id,
         "run_id": run_id,
-        "status": status,
+        # Stable per (gallery, run) so Mise and Argus dedupe re-deliveries/retries.
+        "idempotency_key": idempotency_key(gallery_id, run_id),
+        "status": normalize_status(status),
         "photos": photos_to_vision(photos),
         "cost_usd": cost_usd,
         "latency_ms": latency_ms,
