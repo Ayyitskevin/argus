@@ -25,7 +25,7 @@ from .vision import (
 
 log = logging.getLogger("argus.cloud_vision")
 
-PROVIDERS = ("grok", "openai", "anthropic", "mock")
+PROVIDERS = ("grok", "qwen", "openai", "anthropic", "mock")
 
 
 class CloudVisionError(Exception):
@@ -60,6 +60,8 @@ def analyze_with_provider(
 
     if provider == "grok":
         return _analyze_grok(image_path, model=model, prefs=prefs)
+    if provider == "qwen":
+        return _analyze_qwen(image_path, model=model, prefs=prefs)
     if provider == "openai":
         return _analyze_openai(image_path, model=model, prefs=prefs)
     if provider == "anthropic":
@@ -70,6 +72,17 @@ def analyze_with_provider(
 def _prepare_b64(image_path: str | Path) -> tuple[str, tuple[int, int]]:
     img_bytes, size = vision._prepare_image(image_path)
     return base64.b64encode(img_bytes).decode("utf-8"), size
+
+
+def _downsized_b64(image_path: str | Path, *, max_side: int) -> str:
+    """Base64 of a downsized web derivative (never the original) for local Qwen.
+
+    Privacy/payload guard: caps the longest edge so client media leaves Argus only
+    as a bounded thumbnail, even though the Qwen endpoint is local/trusted."""
+    from .image_io import thumbnail_jpeg_bytes
+
+    data = thumbnail_jpeg_bytes(image_path, max_side=max_side)
+    return base64.b64encode(data).decode("utf-8")
 
 
 def _build_result(
@@ -144,6 +157,67 @@ def _analyze_grok(
     return result, usage
 
 
+def _analyze_qwen(
+    image_path: str | Path,
+    *,
+    model: str | None,
+    prefs: dict | None,
+) -> tuple[AnalysisResult, dict]:
+    """Local Qwen3-VL via an OpenAI-compatible /chat/completions endpoint (Ollama).
+
+    Same structured prompt and same _build_result normalizer as every other
+    provider, so the output contract is byte-identical to Grok. cost_usd is 0
+    (local). temperature 0 + JSON mode for deterministic, schema-valid replies."""
+    model_name = model or config.QWEN_VISION_MODEL
+    b64 = _downsized_b64(image_path, max_side=config.QWEN_MAX_IMAGE_PX)
+    user_prompt = vision.USER_PROMPT_TEMPLATE.format(max_tags=config.DEFAULT_MAX_TAGS)
+    # Apply the per-client style nudge exactly like the homelab Grok path, so a
+    # client's style preference steers both providers identically (comparable output).
+    style_suffix = vision.style_prompt_suffix(prefs)
+    if style_suffix:
+        user_prompt = f"{user_prompt}\n\n{style_suffix}"
+    headers = {"Content-Type": "application/json"}
+    if config.QWEN_API_KEY:
+        headers["Authorization"] = f"Bearer {config.QWEN_API_KEY}"
+    payload = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": system_prompt()},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+                    },
+                ],
+            },
+        ],
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+    }
+
+    def extract(data: dict) -> str:
+        choices = data.get("choices") or []
+        if not choices:
+            raise CloudVisionError("qwen response missing choices")
+        return (choices[0].get("message") or {}).get("content") or ""
+
+    return _post_json_vision(
+        url=f"{config.QWEN_BASE_URL}/chat/completions",
+        headers=headers,
+        payload=payload,
+        extract_content=extract,
+        provider="qwen",
+        model_label=f"qwen:{model_name}",
+        image_path=image_path,
+        prefs=prefs,
+        timeout=config.QWEN_TIMEOUT,
+        cost_usd=0.0,
+    )
+
+
 def _post_json_vision(
     *,
     url: str,
@@ -154,18 +228,38 @@ def _post_json_vision(
     model_label: str,
     image_path: str | Path,
     prefs: dict | None,
+    timeout: float | None = None,
+    cost_usd: float | None = None,
 ) -> tuple[AnalysisResult, dict]:
-    with httpx.Client(timeout=config.XAI_TIMEOUT) as client:
-        resp = client.post(url, json=payload, headers=headers)
+    # An unreachable/timed-out endpoint must surface as a recorded provider error
+    # (CloudVisionError), never a raw httpx raise that crashes the analyze flow.
+    try:
+        with httpx.Client(timeout=timeout or config.XAI_TIMEOUT) as client:
+            resp = client.post(url, json=payload, headers=headers)
+    except httpx.RequestError as exc:
+        raise CloudVisionError(f"{provider} endpoint unreachable: {exc}") from exc
     if resp.status_code >= 400:
         raise CloudVisionError(f"{provider} HTTP {resp.status_code}: {resp.text[:400]}")
-    data = resp.json()
-    content = extract_content(data)
-    parsed = _parse_vision_payload(content)
+    # Strict parse — a non-JSON HTTP body, missing content, or malformed/empty
+    # reply all surface as CloudVisionError (the documented provider-error type),
+    # so a half-parsed result is never built and the SaaS handler records it
+    # cleanly instead of leaking a raw JSONDecodeError.
+    try:
+        data = resp.json()
+        content = extract_content(data)
+        parsed = _parse_vision_payload(content)
+    except CloudVisionError:
+        raise
+    except Exception as exc:
+        raise CloudVisionError(f"{provider} invalid response: {exc}") from exc
     _, (width, height) = _prepare_b64(image_path)
     usage = {
         "provider": provider,
-        "cost_usd": config.CLOUD_COST_PER_IMAGE if config.COST_TRACKING else 0.0,
+        "cost_usd": (
+            cost_usd
+            if cost_usd is not None
+            else (config.CLOUD_COST_PER_IMAGE if config.COST_TRACKING else 0.0)
+        ),
     }
     result = _build_result(
         image_path,

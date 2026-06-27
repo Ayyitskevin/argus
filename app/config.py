@@ -49,6 +49,23 @@ DEFAULT_MAX_TAGS = int(os.environ.get("ARGUS_MAX_TAGS", "12"))
 _raw_backend = os.environ.get("ARGUS_VISION_BACKEND", "mock").lower()
 VISION_BACKEND = "grok" if _raw_backend == "real" else _raw_backend  # "real" alias for grok
 
+# Vision provider for the real (non-mock) path — reversible cutover selector.
+#   grok = current xAI cloud path (DEFAULT, behavior unchanged, rollback target)
+#   qwen = local Qwen3-VL on an OpenAI-compatible endpoint (Ollama)
+# Mock backend (CI default) ignores this, so CI default behavior is unchanged.
+# Switching providers is a single env change; output/schema/callback are identical.
+VISION_PROVIDER = os.environ.get("ARGUS_VISION_PROVIDER", "grok").strip().lower() or "grok"
+
+# Local Qwen3-VL endpoint (used only when VISION_PROVIDER=qwen). OpenAI-compatible
+# /chat/completions. Treated as a trusted local/tailnet endpoint — never route
+# client media to an unapproved cloud host. cost_usd is 0 for local Qwen.
+QWEN_BASE_URL = os.environ.get("ARGUS_QWEN_BASE_URL", "http://mickeybot:11434/v1").rstrip("/")
+QWEN_VISION_MODEL = os.environ.get("ARGUS_QWEN_VISION_MODEL", "qwen3-vl:32b")
+QWEN_API_KEY = os.environ.get("ARGUS_QWEN_API_KEY") or None  # usually unset for local Ollama
+QWEN_TIMEOUT = float(os.environ.get("ARGUS_QWEN_TIMEOUT", "180"))
+# Longest edge (px) of the downsized web derivative sent to Qwen — never originals.
+QWEN_MAX_IMAGE_PX = int(os.environ.get("ARGUS_QWEN_MAX_IMAGE_PX", "1024"))
+
 # Structured-output mode (Mise vision cutover) — OFF by default so the live Grok
 # export/callback path is byte-for-byte unchanged. When on, completed Mise-gallery
 # runs additionally emit the shared vision.schema.json shape + cost_usd/latency_ms

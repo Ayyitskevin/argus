@@ -8,21 +8,33 @@ def vision_status() -> dict:
     """Return operator-facing vision configuration and readiness."""
     backend = config.VISION_BACKEND
     key_configured = bool(config.XAI_API_KEY)
-    provider = "xai" if backend == "grok" else backend
 
-    if backend == "mock":
-        ready = True
-        message = "Mock backend — no xAI calls; safe for CI and local dev."
-    elif backend == "grok":
-        if not key_configured:
-            ready = False
-            message = "Grok backend selected but XAI_API_KEY is not set."
-        else:
-            ready = True
-            message = "Grok vision configured — run scripts/grok_smoke.py to verify credits."
+    if backend == "grok" and config.VISION_PROVIDER == "qwen":
+        # Local Qwen3-VL cutover path — readiness is the local endpoint, not xAI.
+        provider = "qwen"
+        model = config.QWEN_VISION_MODEL
+        ready = bool(config.QWEN_BASE_URL)
+        message = (
+            f"Local Qwen vision configured at {config.QWEN_BASE_URL} ({model})."
+            if ready
+            else "Qwen provider selected but ARGUS_QWEN_BASE_URL is not set."
+        )
     else:
-        ready = False
-        message = f"Unsupported vision backend: {backend}"
+        provider = "xai" if backend == "grok" else backend
+        model = config.VISION_MODEL
+        if backend == "mock":
+            ready = True
+            message = "Mock backend — no xAI calls; safe for CI and local dev."
+        elif backend == "grok":
+            if not key_configured:
+                ready = False
+                message = "Grok backend selected but XAI_API_KEY is not set."
+            else:
+                ready = True
+                message = "Grok vision configured — run scripts/grok_smoke.py to verify credits."
+        else:
+            ready = False
+            message = f"Unsupported vision backend: {backend}"
 
     snap = metrics.snapshot()
     grok_counters = {
@@ -34,7 +46,8 @@ def vision_status() -> dict:
     return {
         "backend": backend,
         "provider": provider,
-        "model": config.VISION_MODEL,
+        "vision_provider": config.VISION_PROVIDER,
+        "model": model,
         "api_key_configured": key_configured,
         "ready": ready,
         "message": message,

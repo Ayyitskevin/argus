@@ -372,7 +372,7 @@ def analyze_folder_estimate(
         "analyze_all": effective_limit is None,
         "limit": limit_for_storage(effective_limit),
     }
-    if config.VISION_BACKEND == "grok" and count > 0:
+    if config.VISION_BACKEND == "grok" and config.VISION_PROVIDER == "grok" and count > 0:
         from .xai_budget import today_snapshot
 
         cost_per = float(config.XAI_ESTIMATED_COST_PER_IMAGE)
@@ -458,7 +458,12 @@ def analyze_folder_run(
         metering.enforce_caps(tenant_id, images=planned)
     except MeteringError as exc:
         raise AnalyzeError(exc.message, exc.status_code) from exc
-    if config.VISION_BACKEND == "grok" and not config.SAAS_MODE and planned > 0:
+    if (
+        config.VISION_BACKEND == "grok"
+        and config.VISION_PROVIDER == "grok"
+        and not config.SAAS_MODE
+        and planned > 0
+    ):
         from .xai_budget import XaiBudgetError, check_budget
 
         try:

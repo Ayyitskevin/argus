@@ -5,8 +5,13 @@ Named for Argus (the many-eyed giant).
 
 See [`docs/PHASE-0.md`](docs/PHASE-0.md) for the initial scope and what we're proving first.
 
-**Vision:** xAI Grok API only (`ARGUS_VISION_BACKEND=grok`). Mock for CI. No local qwen/Ollama.
+**Vision:** xAI Grok API by default (`ARGUS_VISION_BACKEND=grok`). Mock for CI.
 See [`docs/DOGFOOD-STANDARD.md`](docs/DOGFOOD-STANDARD.md). CI stays mock-only.
+
+**Vision provider (reversible cutover):** `ARGUS_VISION_PROVIDER=grok|qwen` (default `grok`).
+`qwen` routes the real path to a local Qwen3-VL (32B) on an OpenAI-compatible endpoint (Ollama)
+emitting the *identical* structured output with `cost_usd:0`. Switching is a single env change;
+Grok stays the default and instant rollback. See [`docs/VISION-PROVIDERS.md`](docs/VISION-PROVIDERS.md).
 
 **Structured-output mode (Mise vision cutover):** set `ARGUS_STRUCTURED_OUTPUT=true`
 to additionally emit the shared [`schemas/vision.schema.json`](schemas/vision.schema.json)
