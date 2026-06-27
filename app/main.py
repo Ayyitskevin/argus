@@ -1722,6 +1722,38 @@ def admin_audit_log(
     return {"events": db.list_audit_events(tenant_id=tenant_id, action=action, limit=limit)}
 
 
+@app.get("/admin/callbacks/dead-letters", response_class=JSONResponse, dependencies=[Depends(require_admin)])
+def admin_list_dead_letters(limit: int = Query(50, ge=1, le=500)):
+    """Undelivered structured callbacks held locally (never lost). Metadata only —
+    the full payload is re-POSTed by /admin/callbacks/redeliver, not exposed here."""
+    rows = db.list_dead_letter_callbacks(limit=limit)
+    return {
+        "count": db.dead_letter_callback_count(),
+        "dead_letters": [
+            {
+                "idempotency_key": r["idempotency_key"],
+                "gallery_id": r["gallery_id"],
+                "run_id": r["run_id"],
+                "attempts": r["attempts"],
+                "last_status": r["last_status"],
+                "last_error": r["last_error"],
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.post("/admin/callbacks/redeliver", response_class=JSONResponse, dependencies=[Depends(require_admin)])
+def admin_redeliver_callbacks(limit: int = Query(50, ge=1, le=500)):
+    """Re-POST dead-lettered structured callbacks to Mise (idempotent — safe to
+    re-run). Returns how many were attempted, delivered, and still failing."""
+    from . import mise_client
+
+    return mise_client.redeliver_dead_letters(limit=limit)
+
+
 @app.post("/admin/tenants/{tenant_id}/billing/checkout", response_class=JSONResponse, dependencies=[Depends(require_admin)])
 def admin_billing_checkout(tenant_id: str, request: Request, ctx: AuthContext = Depends(require_admin)):
     if not config.SAAS_MODE:

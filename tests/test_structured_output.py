@@ -261,7 +261,7 @@ def test_argus_callback_noops_when_mise_unconfigured(monkeypatch):
     from app import mise_client
 
     posted = []
-    monkeypatch.setattr(mise_client, "_post_argus_callback", lambda *a, **k: posted.append(a))
+    monkeypatch.setattr(mise_client, "_deliver_with_retry", lambda *a, **k: posted.append(a))
     # MISE_URL/token empty (fixture) -> not enabled -> no post, no thread, no error
     mise_client.argus_callback(1, {"run_id": 1}, background=False)
     assert posted == []
@@ -273,6 +273,6 @@ def test_argus_callback_posts_when_configured(monkeypatch):
     monkeypatch.setattr(config, "MISE_URL", "http://mise.local")
     monkeypatch.setattr(config, "MISE_API_TOKEN", "tok")
     posted = []
-    monkeypatch.setattr(mise_client, "_post_argus_callback", lambda *a, **k: posted.append(a))
+    monkeypatch.setattr(mise_client, "_deliver_with_retry", lambda *a, **k: posted.append(a))
     mise_client.argus_callback(5, {"run_id": 9}, background=False)
     assert posted == [(5, {"run_id": 9})]
