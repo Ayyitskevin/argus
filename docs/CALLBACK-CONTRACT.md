@@ -54,13 +54,30 @@ Authenticated with the Mise service token (`ARGUS_MISE_API_TOKEN`,
 `Authorization: Bearer …`), attached only to the `MISE_URL`-derived callback —
 never to a tenant-supplied URL.
 
-## Roadmap (follow-up PRs)
+## Reliable delivery  ✅ (implemented)
 
-- **Reliable delivery (PR 2):** retry transient failures (network / 5xx / 429)
-  with exponential backoff; on exhaustion, **dead-letter** the payload locally
-  (`callback_outbox`) and surface it, then re-deliver — keyed on the idempotency
-  key so re-delivery is safe. `404`/`410` (unknown/stale gallery) is a **no-op**,
-  not an error. A completed analysis is never lost to a failed callback.
+The structured callback delivers durably — a completed analysis is never lost to
+a failed callback:
+
+- **Retry with backoff.** Transient failures (network error, timeout, `5xx`,
+  `429`) are retried with exponential backoff
+  (`ARGUS_MISE_CALLBACK_MAX_ATTEMPTS`, default 3; `ARGUS_MISE_CALLBACK_BACKOFF_BASE`,
+  default 0.5s) on the background delivery thread.
+- **No-op on stale subject.** `404`/`410` (unknown/stale gallery) is a no-op, not
+  an error — nothing to deliver, no retry, no dead-letter.
+- **Dead-letter.** On exhaustion (or a hard `4xx` such as `401`), the payload is
+  persisted to the `callback_outbox` table (keyed on `idempotency_key`, so a
+  re-dead-letter of the same run updates one row, never duplicates) and surfaced
+  via `structured_log` + an optional operator webhook (`ARGUS_CAP_WEBHOOK_URL`).
+- **Re-delivery.** `POST /admin/callbacks/redeliver` (and a periodic worker tick)
+  re-POSTs dead-lettered rows; success removes the row. The stable idempotency key
+  makes re-delivery safe (Mise won't double-apply). `GET /admin/callbacks/dead-letters`
+  lists what's pending (metadata only). Both require the admin token.
+
+## Roadmap (follow-up PR)
+
 - **Auth robustness / 401 re-auth (PR 3):** on `401`, reload the Mise service
-  token from the environment/`.env` (the token-drift case) and retry once; on a
-  hard failure, dead-letter + alert (log/webhook/email) — never a silent drop.
+  token from the environment/`.env` (the token-drift case) and retry once *before*
+  dead-lettering — turning the known 401 outage into a self-heal. Until then a
+  `401` is treated as a hard failure and dead-lettered (recorded + re-deliverable,
+  never silently dropped).

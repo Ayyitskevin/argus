@@ -7,15 +7,21 @@ still reachable (shared mount / same host).
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
+import time
 from typing import Any
 
 import httpx
 
-from . import config
+from . import config, db, structured_log
 
 log = logging.getLogger("argus.mise")
+
+# HTTP statuses worth retrying (transient). 404/410 are treated as a no-op
+# (the gallery is gone), other 4xx (incl. 401) as a hard failure -> dead-letter.
+_TRANSIENT_STATUS = frozenset({429, 500, 502, 503, 504})
 
 
 class MiseClientError(Exception):
@@ -78,8 +84,9 @@ def _callback_headers(payload: dict[str, Any]) -> dict[str, str]:
     return headers
 
 
-def _post_argus_callback(gallery_id: int, payload: dict[str, Any]) -> None:
-    """Blocking POST of a structured-output payload to Mise (best-effort)."""
+def _attempt_post(gallery_id: int, payload: dict[str, Any]) -> tuple[str, str | None]:
+    """One POST attempt. Returns (outcome, detail) where outcome is one of:
+    delivered | noop (stale subject) | transient (retryable) | hard (do not retry)."""
     url = f"{config.MISE_URL}/api/argus/callback"
     try:
         with httpx.Client(timeout=config.MISE_TIMEOUT) as client:
@@ -91,17 +98,96 @@ def _post_argus_callback(gallery_id: int, payload: dict[str, Any]) -> None:
                 follow_redirects=False,
             )
     except httpx.RequestError as exc:
-        log.warning("mise argus callback unreachable gallery %s: %s", gallery_id, exc)
-        return
-    if resp.status_code >= 400:
-        log.warning(
-            "mise argus callback HTTP %s gallery %s: %s",
-            resp.status_code,
-            gallery_id,
-            resp.text[:200],
+        return "transient", f"network: {exc}"
+    code = resp.status_code
+    if code < 300:
+        return "delivered", str(code)
+    if code in (404, 410):
+        return "noop", str(code)
+    if code in _TRANSIENT_STATUS:
+        return "transient", f"HTTP {code}: {resp.text[:160]}"
+    return "hard", f"HTTP {code}: {resp.text[:160]}"
+
+
+def _dead_letter(gallery_id: int, payload: dict[str, Any], last_status: str | None, detail: str | None) -> None:
+    """Persist an undelivered callback so it is never lost, and surface it."""
+    key = payload.get("idempotency_key") or f"argus-g{gallery_id}-r{payload.get('run_id')}"
+    try:
+        db.enqueue_dead_letter_callback(
+            idempotency_key=str(key),
+            gallery_id=gallery_id,
+            run_id=payload.get("run_id"),
+            payload=json.dumps(payload),
+            last_status=last_status,
+            last_error=detail,
         )
-    else:
-        log.info("structured callback delivered for gallery %s run %s", gallery_id, payload.get("run_id"))
+    except Exception as exc:  # persistence must not raise out of the delivery thread
+        log.error("failed to dead-letter callback gallery %s: %s", gallery_id, exc)
+    structured_log.event(
+        "callback.dead_letter",
+        gallery_id=gallery_id,
+        run_id=payload.get("run_id"),
+        idempotency_key=str(key),
+        last_status=last_status,
+    )
+    log.error(
+        "structured callback dead-lettered gallery %s run %s (%s) — re-deliverable via "
+        "/admin/callbacks/redeliver",
+        gallery_id,
+        payload.get("run_id"),
+        last_status,
+    )
+    _alert_dead_letter(gallery_id, str(key), last_status, detail)
+
+
+def _alert_dead_letter(gallery_id: int, key: str, last_status: str | None, detail: str | None) -> None:
+    """Best-effort operator alert so a dead-lettered run never fails silently."""
+    url = config.CAP_WEBHOOK_URL
+    if not url:
+        return
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            client.post(
+                url,
+                json={
+                    "alert": "argus_callback_dead_letter",
+                    "gallery_id": gallery_id,
+                    "idempotency_key": key,
+                    "last_status": last_status,
+                    "last_error": detail,
+                },
+            )
+    except Exception as exc:
+        log.warning("dead-letter alert webhook failed: %s", exc)
+
+
+def _deliver_with_retry(gallery_id: int, payload: dict[str, Any]) -> str:
+    """Deliver with exponential backoff on transient failures; dead-letter on
+    exhaustion or a hard failure. Returns the terminal outcome."""
+    attempts = config.MISE_CALLBACK_MAX_ATTEMPTS
+    last_status: str | None = "transient"
+    last_detail: str | None = "no attempt made"
+    for attempt in range(1, attempts + 1):
+        outcome, detail = _attempt_post(gallery_id, payload)
+        if outcome == "delivered":
+            log.info("structured callback delivered for gallery %s run %s", gallery_id, payload.get("run_id"))
+            return "delivered"
+        if outcome == "noop":
+            log.info("structured callback no-op (stale subject %s) gallery %s", detail, gallery_id)
+            return "noop"
+        last_status, last_detail = outcome, detail
+        if outcome == "hard":
+            log.warning("structured callback hard failure gallery %s: %s", gallery_id, detail)
+            break
+        if attempt < attempts:
+            backoff = config.MISE_CALLBACK_BACKOFF_BASE * (2 ** (attempt - 1))
+            log.warning(
+                "structured callback transient failure gallery %s (attempt %s/%s): %s — retrying in %.1fs",
+                gallery_id, attempt, attempts, detail, backoff,
+            )
+            time.sleep(backoff)
+    _dead_letter(gallery_id, payload, last_status, last_detail)
+    return "dead_letter"
 
 
 def argus_callback(gallery_id: int, payload: dict[str, Any], *, background: bool = True) -> None:
@@ -109,21 +195,50 @@ def argus_callback(gallery_id: int, payload: dict[str, Any], *, background: bool
 
     No-ops unless Mise is configured (ARGUS_MISE_URL + ARGUS_MISE_API_TOKEN), so
     CI/dev never makes an HTTP call. Fires on a daemon thread by default so it
-    never blocks the analyze response or the job worker loop. The payload is a
-    deterministic function of the persisted run, so a retry re-delivers the same
-    body — Mise dedups on (gallery_id, run_id)/correlation_id."""
+    never blocks the analyze response or the job worker loop. Transient failures
+    are retried with exponential backoff; on exhaustion (or a hard failure) the
+    payload is dead-lettered locally and re-deliverable — a completed run is never
+    lost. The payload is deterministic and carries a stable idempotency_key, so a
+    retry/re-delivery is safe (Mise dedupes)."""
     if not is_enabled():
         log.debug("structured callback skipped (Mise not configured) gallery %s", gallery_id)
         return
     if not background:
-        _post_argus_callback(gallery_id, payload)
+        _deliver_with_retry(gallery_id, payload)
         return
     threading.Thread(
-        target=_post_argus_callback,
+        target=_deliver_with_retry,
         args=(gallery_id, payload),
         name=f"argus-mise-callback-{gallery_id}",
         daemon=True,
     ).start()
+
+
+def redeliver_dead_letters(*, limit: int = 50) -> dict[str, int]:
+    """Re-POST dead-lettered callbacks (single attempt each). On success the row
+    is removed; on continued failure its attempt counter is bumped. Idempotent —
+    the stable idempotency_key means Mise won't double-apply. No-op if Mise is
+    unconfigured. Safe to call from the worker tick or POST /admin/callbacks/redeliver."""
+    summary = {"attempted": 0, "delivered": 0, "still_failed": 0}
+    if not is_enabled():
+        return summary
+    for row in db.list_dead_letter_callbacks(limit=limit):
+        summary["attempted"] += 1
+        try:
+            payload = json.loads(row["payload"])
+        except (TypeError, ValueError):
+            db.resolve_dead_letter_callback(row["idempotency_key"])  # unparseable; drop
+            continue
+        outcome, detail = _attempt_post(row["gallery_id"], payload)
+        if outcome in ("delivered", "noop"):
+            db.resolve_dead_letter_callback(row["idempotency_key"])
+            summary["delivered"] += 1
+        else:
+            db.bump_dead_letter_attempt(row["idempotency_key"], last_status=outcome, last_error=detail)
+            summary["still_failed"] += 1
+    if summary["attempted"]:
+        log.info("dead-letter redelivery: %s", summary)
+    return summary
 
 
 def plutus_callback(

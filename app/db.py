@@ -185,6 +185,18 @@ CREATE TABLE IF NOT EXISTS cap_alert_log (
     FOREIGN KEY(tenant_id) REFERENCES tenants(id)
 );
 
+CREATE TABLE IF NOT EXISTS callback_outbox (
+    idempotency_key TEXT PRIMARY KEY,
+    gallery_id INTEGER,
+    run_id INTEGER,
+    payload TEXT NOT NULL,
+    attempts INTEGER NOT NULL DEFAULT 1,
+    last_status TEXT,
+    last_error TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS mise_analyze_ledger (
     dedup_key TEXT PRIMARY KEY,
     mise_gallery_id INTEGER NOT NULL,
@@ -1394,6 +1406,70 @@ def upsert_mise_analyze_ledger(
                  updated_at=datetime('now')""",
             (dedup_key, mise_gallery_id, client_id, run_id, job_id, status, folder_fingerprint),
         )
+
+
+def enqueue_dead_letter_callback(
+    *,
+    idempotency_key: str,
+    gallery_id: int | None,
+    run_id: int | None,
+    payload: str,
+    last_status: str | None = None,
+    last_error: str | None = None,
+) -> None:
+    """Persist an undelivered structured callback so it is never lost. Keyed on
+    the idempotency key, so a re-dead-letter of the same (gallery, run) updates the
+    existing row (bumps attempts) rather than duplicating it."""
+    with tx() as con:
+        con.execute(
+            """INSERT INTO callback_outbox
+               (idempotency_key, gallery_id, run_id, payload, attempts, last_status, last_error, updated_at)
+               VALUES (?, ?, ?, ?, 1, ?, ?, datetime('now'))
+               ON CONFLICT(idempotency_key) DO UPDATE SET
+                 attempts = callback_outbox.attempts + 1,
+                 payload = excluded.payload,
+                 last_status = excluded.last_status,
+                 last_error = excluded.last_error,
+                 updated_at = datetime('now')""",
+            (idempotency_key, gallery_id, run_id, payload, last_status, last_error),
+        )
+
+
+def list_dead_letter_callbacks(limit: int = 50) -> list[dict]:
+    con = connect()
+    try:
+        rows = con.execute(
+            "SELECT * FROM callback_outbox ORDER BY created_at ASC LIMIT ?",
+            (max(1, int(limit)),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        close(con)
+
+
+def bump_dead_letter_attempt(idempotency_key: str, *, last_status: str | None, last_error: str | None) -> None:
+    with tx() as con:
+        con.execute(
+            """UPDATE callback_outbox
+               SET attempts = attempts + 1, last_status = ?, last_error = ?, updated_at = datetime('now')
+               WHERE idempotency_key = ?""",
+            (last_status, last_error, idempotency_key),
+        )
+
+
+def resolve_dead_letter_callback(idempotency_key: str) -> None:
+    """Remove a callback from the outbox once it is delivered (or a no-op)."""
+    with tx() as con:
+        con.execute("DELETE FROM callback_outbox WHERE idempotency_key = ?", (idempotency_key,))
+
+
+def dead_letter_callback_count() -> int:
+    con = connect()
+    try:
+        row = con.execute("SELECT COUNT(*) AS n FROM callback_outbox").fetchone()
+        return int(row["n"]) if row else 0
+    finally:
+        close(con)
 
 
 def list_preference_clients(*, tenant_id: str | None = None) -> list[dict]:

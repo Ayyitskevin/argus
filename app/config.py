@@ -184,6 +184,12 @@ MISE_URL = os.environ.get("ARGUS_MISE_URL", "").rstrip("/")
 MISE_API_TOKEN = os.environ.get("ARGUS_MISE_API_TOKEN", "")
 MISE_TIMEOUT = int(os.environ.get("ARGUS_MISE_TIMEOUT", "10"))
 
+# Structured callback reliable delivery: retry transient failures (network/5xx/429)
+# with exponential backoff, then dead-letter locally so a completed run is never
+# lost (re-deliverable via /admin/callbacks/redeliver). See docs/CALLBACK-CONTRACT.md.
+MISE_CALLBACK_MAX_ATTEMPTS = max(1, int(os.environ.get("ARGUS_MISE_CALLBACK_MAX_ATTEMPTS", "3")))
+MISE_CALLBACK_BACKOFF_BASE = float(os.environ.get("ARGUS_MISE_CALLBACK_BACKOFF_BASE", "0.5"))
+
 # Homelab: Plutus upsell hand-off after Mise gallery analyze (:8030).
 PLUTUS_URL = os.environ.get("ARGUS_PLUTUS_URL", "").rstrip("/")
 # Browser-facing review/pitch links (defaults to PLUTUS_URL when unset).

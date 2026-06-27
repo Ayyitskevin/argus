@@ -235,6 +235,15 @@ class JobWorker:
                 stuck = reconcile_stuck_jobs()
                 if stuck:
                     log.warning("Marked %s stuck running job(s) as failed", stuck)
+                # Self-healing: re-deliver any dead-lettered Mise callbacks so a
+                # completed run that failed its callback isn't stuck until an
+                # operator manually re-runs /admin/callbacks/redeliver.
+                try:
+                    from . import mise_client
+
+                    mise_client.redeliver_dead_letters()
+                except Exception as exc:  # best-effort; never crash the worker loop
+                    log.warning("dead-letter redelivery tick failed: %s", exc)
 
             if self._slots.acquire(blocking=False):
                 job = db.claim_next_job()
