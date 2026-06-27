@@ -214,9 +214,13 @@ def healthz(request: Request):
         "model": config.VISION_MODEL,
         "grok_configured": bool(config.XAI_API_KEY),
         "xai_budget": xai_budget.today_snapshot()
-        if config.VISION_BACKEND == "grok"
+        if config.VISION_BACKEND == "grok" and config.VISION_PROVIDER == "grok"
         else {"enabled": False},
-        "vision_provider": "xai" if config.VISION_BACKEND == "grok" else config.VISION_BACKEND,
+        "vision_provider": (
+            ("xai" if config.VISION_PROVIDER == "grok" else config.VISION_PROVIDER)
+            if config.VISION_BACKEND == "grok"
+            else config.VISION_BACKEND
+        ),
         "saas_mode": config.SAAS_MODE,
         "cloud_cost_cap_usd": config.CLOUD_COST_CAP_USD or None,
         "cloud_monthly_image_cap": config.CLOUD_MONTHLY_IMAGE_CAP or None,

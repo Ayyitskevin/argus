@@ -379,6 +379,58 @@ def _mock_result(
     )
 
 
+def _analyze_qwen_local(
+    image_path: str | Path,
+    *,
+    model: str | None,
+    prefs: dict | None,
+    width: int | None,
+    height: int | None,
+    started: float,
+) -> AnalysisResult:
+    """Homelab/studio Qwen3-VL path.
+
+    Reuses cloud_vision._analyze_qwen (same _build_result normalizer as Grok) so
+    the output contract is identical, then enforces the resilience contract: any
+    provider/parse/transport failure becomes a recorded analysis_failed result
+    (cost 0), never a raise — the analyze/callback flow must not crash. Local
+    Qwen is free, so cost_usd is always 0."""
+    from . import cloud_vision
+
+    # Callers thread the grok default (config.VISION_MODEL) as the model, so fall
+    # back to the Qwen model unless an explicit non-default model was requested.
+    model_name = model if (model and model != config.VISION_MODEL) else config.QWEN_VISION_MODEL
+    try:
+        result, _usage = cloud_vision._analyze_qwen(image_path, model=model_name, prefs=prefs)
+        result.cost_usd = 0.0
+        _log_image_analyzed(image_path=image_path, model=model_name, result=result, started=started)
+        return result
+    except Exception as exc:
+        log.error("qwen vision failed for %s: %s", image_path, exc)
+        failed = AnalysisResult(
+            image_path=str(image_path),
+            width=width,
+            height=height,
+            shot_type="other",
+            keywords=["analysis-failed"],
+            culling=Culling(
+                keeper_score=0.3,
+                hero_potential=0.3,
+                technical_quality="unknown",
+                notes=f"Error: {exc}",
+            ),
+            alt_text="Image analysis unavailable.",
+            description="",
+            suggested_iptc={},
+            raw_response=str(exc),
+            model=f"qwen:{model_name}",
+            analysis_failed=True,
+            cost_usd=0.0,
+        )
+        _log_image_analyzed(image_path=image_path, model=model_name, result=failed, started=started)
+        return failed
+
+
 def analyze_image(
     image_path: str | Path,
     model: str | None = None,
@@ -478,6 +530,19 @@ def analyze_image(
 
     if config.VISION_BACKEND != "grok":
         raise ValueError(f"unsupported VISION_BACKEND: {config.VISION_BACKEND}")
+
+    # Provider switch (reversible cutover). Default "grok" falls through to the
+    # unchanged xAI path below; "qwen" routes to the local OpenAI-compatible
+    # endpoint. Mock backend already returned above, so provider is real here.
+    if config.VISION_PROVIDER == "qwen":
+        return _analyze_qwen_local(
+            image_path,
+            model=model,
+            prefs=prefs,
+            width=width,
+            height=height,
+            started=started,
+        )
 
     from .xai_budget import XaiBudgetError, check_budget, record_cost
 

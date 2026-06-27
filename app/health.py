@@ -41,10 +41,20 @@ def _check_vision() -> dict[str, str | bool]:
     if backend == "mock":
         return {"status": "ok", "backend": backend, "configured": True}
     if backend == "grok":
+        # Real path readiness depends on the selected provider, not just xAI.
+        if config.VISION_PROVIDER == "qwen":
+            configured = bool(config.QWEN_BASE_URL)
+            return {
+                "status": "ok" if configured else "degraded",
+                "backend": backend,
+                "provider": "qwen",
+                "configured": configured,
+            }
         configured = bool(config.XAI_API_KEY)
         return {
             "status": "ok" if configured else "degraded",
             "backend": backend,
+            "provider": "grok",
             "configured": configured,
         }
     return {"status": "ok", "backend": backend, "configured": True}
