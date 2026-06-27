@@ -8,6 +8,7 @@ still reachable (shared mount / same host).
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 import httpx
@@ -65,6 +66,54 @@ def get_gallery(gallery_id: int) -> dict[str, Any] | None:
         if row.get("id") == gallery_id:
             return row
     return None
+
+
+def _post_argus_callback(gallery_id: int, payload: dict[str, Any]) -> None:
+    """Blocking POST of a structured-output payload to Mise (best-effort)."""
+    url = f"{config.MISE_URL}/api/argus/callback"
+    try:
+        with httpx.Client(timeout=config.MISE_TIMEOUT) as client:
+            resp = client.post(
+                url,
+                params={"gallery_id": gallery_id},
+                json=payload,
+                headers=_headers(),
+                follow_redirects=False,
+            )
+    except httpx.RequestError as exc:
+        log.warning("mise argus callback unreachable gallery %s: %s", gallery_id, exc)
+        return
+    if resp.status_code >= 400:
+        log.warning(
+            "mise argus callback HTTP %s gallery %s: %s",
+            resp.status_code,
+            gallery_id,
+            resp.text[:200],
+        )
+    else:
+        log.info("structured callback delivered for gallery %s run %s", gallery_id, payload.get("run_id"))
+
+
+def argus_callback(gallery_id: int, payload: dict[str, Any], *, background: bool = True) -> None:
+    """Send a structured-output result to Mise's POST /api/argus/callback?gallery_id.
+
+    No-ops unless Mise is configured (ARGUS_MISE_URL + ARGUS_MISE_API_TOKEN), so
+    CI/dev never makes an HTTP call. Fires on a daemon thread by default so it
+    never blocks the analyze response or the job worker loop. The payload is a
+    deterministic function of the persisted run, so a retry re-delivers the same
+    body — Mise dedups on (gallery_id, run_id)/correlation_id."""
+    if not is_enabled():
+        log.debug("structured callback skipped (Mise not configured) gallery %s", gallery_id)
+        return
+    if not background:
+        _post_argus_callback(gallery_id, payload)
+        return
+    threading.Thread(
+        target=_post_argus_callback,
+        args=(gallery_id, payload),
+        name=f"argus-mise-callback-{gallery_id}",
+        daemon=True,
+    ).start()
 
 
 def plutus_callback(

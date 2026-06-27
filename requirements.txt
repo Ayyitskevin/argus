@@ -14,6 +14,8 @@ python-dotenv
 pytest
 pytest-asyncio
 ruff
+# Validates structured-output mode against schemas/vision.schema.json in tests.
+jsonschema
 
 # Optional: ARGUS_STORAGE_BACKEND=s3
 # boto3

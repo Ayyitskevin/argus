@@ -837,6 +837,42 @@ def studio_run_urls(*, run_id: int | None = None, job_id: str | None = None) -> 
     return {}
 
 
+def maybe_emit_structured_callback(
+    *,
+    mise_gallery_id: int | None,
+    run_id: int | None,
+    correlation_id: str | None = None,
+    tenant_id: str | None = None,
+    status: str = "done",
+) -> None:
+    """Fire the Mise structured-output callback when the mode is enabled.
+
+    No-op unless ARGUS_STRUCTURED_OUTPUT is on and we have a Mise gallery + run.
+    Reads the persisted run so the payload is a deterministic function of stored
+    state — a retry re-emits an identical body (idempotent; Mise dedups). Never
+    raises: a callback problem must not fail the analyze that already succeeded."""
+    if not config.STRUCTURED_OUTPUT_ENABLED:
+        return
+    if mise_gallery_id is None or not run_id:
+        return
+    try:
+        from . import mise_client, structured_output
+
+        full_run = db.get_full_run(int(run_id), tenant_id=db.GLOBAL_SCOPE)
+        if not full_run:
+            return
+        payload = structured_output.build_callback_payload(
+            full_run,
+            gallery_id=int(mise_gallery_id),
+            run_id=int(run_id),
+            correlation_id=correlation_id,
+            status=status,
+        )
+        mise_client.argus_callback(int(mise_gallery_id), payload)
+    except Exception as exc:  # best-effort: never break a completed analyze
+        log.warning("structured callback emit failed for gallery %s run %s: %s", mise_gallery_id, run_id, exc)
+
+
 def perform_folder_analyze(
     *,
     folder: str | None = None,
@@ -851,6 +887,7 @@ def perform_folder_analyze(
     callback_url: str | None = None,
     tenant: dict | None = None,
     skip_dedup: bool = False,
+    correlation_id: str | None = None,
 ) -> dict:
     """Shared folder analyze for JSON API and browser UI flows."""
     path, mise_info, attempted = resolve_mise_folder(
@@ -911,6 +948,7 @@ def perform_folder_analyze(
             callback_url=callback_url,
             recursive=recursive,
             tenant_id=tenant["id"] if tenant else None,
+            correlation_id=correlation_id,
         )
         if mise_gallery_id is not None:
             mise_dedup.record_queued(
@@ -962,6 +1000,12 @@ def perform_folder_analyze(
     if mise_gallery_id is not None and result.get("run_id"):
         mise_dedup.record_done(
             mise_gallery_id, client_id, int(result["run_id"]), folder_fingerprint=fp,
+        )
+        maybe_emit_structured_callback(
+            mise_gallery_id=mise_gallery_id,
+            run_id=int(result["run_id"]),
+            correlation_id=correlation_id,
+            tenant_id=tenant["id"] if tenant else None,
         )
     if result.get("run_id"):
         result.update(studio_run_urls(run_id=int(result["run_id"])))

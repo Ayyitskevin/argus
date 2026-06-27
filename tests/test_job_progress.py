@@ -14,7 +14,7 @@ os.environ["ARGUS_VISION_BACKEND"] = "mock"
 os.environ["ARGUS_QUEUE_ENABLED"] = "true"
 os.environ["ARGUS_DATA_DIR"] = _TMP
 
-from app import config, db, service  # noqa: E402
+from app import config, db  # noqa: E402
 from app.jobs import parse_job_progress, process_job  # noqa: E402
 from app.main import app  # noqa: E402
 

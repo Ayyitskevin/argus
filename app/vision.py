@@ -57,6 +57,11 @@ class AnalysisResult(BaseModel):
     raw_response: str = ""
     model: str = ""
     analysis_failed: bool = False
+    # Per-image accounting (Mise structured-output cost report). cost_usd is the
+    # spend attributable to this image (real Grok/cloud usage, or simulated for
+    # mock); latency_ms is wall time inside analyze_image. Both are summed per run.
+    cost_usd: float | None = None
+    latency_ms: float | None = None
 
 
 log = logging.getLogger("argus.vision")
@@ -222,6 +227,7 @@ def _prefiltered_result(
         suggested_iptc={"headline": name, "caption": reason, "keywords": ["non-photographic"]},
         raw_response=json.dumps({"prefiltered": True, "reason": reason}),
         model=f"prefilter:{model}",
+        cost_usd=0.0,
     )
 
 
@@ -244,6 +250,10 @@ def _log_image_analyzed(
     failed: bool = False,
 ) -> None:
     latency_ms = round((time.perf_counter() - started) * 1000, 1)
+    # Stamp latency onto the result so every return path carries it without
+    # having to thread the timer through each branch (used by the run cost report).
+    if result is not None and result.latency_ms is None:
+        result.latency_ms = latency_ms
     structured_log.event(
         "vision.image_analyzed",
         path=str(image_path),
@@ -363,6 +373,9 @@ def _mock_result(
         },
         raw_response="",
         model=f"mock:{model}",
+        # Simulated per-image spend so the structured cost report is non-zero in
+        # mock/CI without calling any model (mirrors service.simulated_cloud_cost).
+        cost_usd=config.CLOUD_COST_PER_IMAGE if config.COST_TRACKING else 0.0,
     )
 
 
@@ -428,6 +441,8 @@ def analyze_image(
                 cost_usd=usage.get("cost_usd"),
                 grok_api_calls=1 if usage.get("provider") == "grok" else 0,
             )
+            if result.cost_usd is None:
+                result.cost_usd = usage.get("cost_usd")
             _log_image_analyzed(image_path=image_path, model=model, result=result, started=started)
             return result
         except CloudVisionError as exc:
@@ -451,6 +466,7 @@ def analyze_image(
                 raw_response=err,
                 model=f"{provider}:{model}",
                 analysis_failed=True,
+                cost_usd=0.0,
             )
             _log_image_analyzed(image_path=image_path, model=model, result=failed, started=started)
             return failed
@@ -487,6 +503,7 @@ def analyze_image(
             raw_response=str(exc),
             model=f"grok:{model}",
             analysis_failed=True,
+            cost_usd=0.0,
         )
         _log_image_analyzed(image_path=image_path, model=model, result=failed, started=started)
         return failed
@@ -497,8 +514,11 @@ def analyze_image(
     if style_suffix:
         user_prompt = f"{user_prompt}\n\n{style_suffix}"
 
+    spent_usd = 0.0  # accumulated Grok spend for this image (includes retry calls)
+
     try:
         def _chat_and_parse(extra_hint: str = "", *, temperature: float = 0.2) -> dict:
+            nonlocal spent_usd
             prompt = user_prompt + (f"\n\n{extra_hint}" if extra_hint else "")
             api_resp = chat_vision(
                 system_prompt=system_prompt(),
@@ -509,7 +529,10 @@ def analyze_image(
             )
             usage = parse_usage(api_resp)
             metrics.record_grok_usage(usage)
-            record_cost(usage.get("cost_usd"), image_path=str(image_path))
+            call_cost = usage.get("cost_usd")
+            if call_cost is not None:
+                spent_usd += float(call_cost)
+            record_cost(call_cost, image_path=str(image_path))
             content = _grok_json_content(api_resp)
             return _parse_vision_payload(content)
 
@@ -554,6 +577,7 @@ def analyze_image(
             suggested_iptc=parsed.get("suggested_iptc") or {},
             raw_response=json.dumps(parsed, ensure_ascii=False),
             model=f"grok:{model}",
+            cost_usd=spent_usd,
         )
 
         log.info("analyzed %s | model=%s | tags=%d | score=%.2f", image_path, model, len(keywords), result.culling.keeper_score)
@@ -584,6 +608,7 @@ def analyze_image(
             raw_response=err,
             model=f"grok:{model}",
             analysis_failed=True,
+            cost_usd=spent_usd,
         )
         _log_image_analyzed(image_path=image_path, model=model, result=failed, started=started)
         return failed
