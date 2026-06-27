@@ -11,7 +11,9 @@ See [`docs/DOGFOOD-STANDARD.md`](docs/DOGFOOD-STANDARD.md). CI stays mock-only.
 **Vision provider (reversible cutover):** `ARGUS_VISION_PROVIDER=grok|qwen` (default `grok`).
 `qwen` routes the real path to a local Qwen3-VL (32B) on an OpenAI-compatible endpoint (Ollama)
 emitting the *identical* structured output with `cost_usd:0`. Switching is a single env change;
-Grok stays the default and instant rollback. See [`docs/VISION-PROVIDERS.md`](docs/VISION-PROVIDERS.md).
+Grok stays the default and instant rollback. Measure before flipping with the parity harness
+(`scripts/compare_providers.py` · `GET /runs/compare/providers`). See
+[`docs/VISION-PROVIDERS.md`](docs/VISION-PROVIDERS.md).
 
 **Structured-output mode (Mise vision cutover):** set `ARGUS_STRUCTURED_OUTPUT=true`
 to additionally emit the shared [`schemas/vision.schema.json`](schemas/vision.schema.json)
