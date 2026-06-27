@@ -131,6 +131,21 @@ def test_qwen_and_grok_identical_contract(monkeypatch, tmp_path):
         assert qwen_photo[key] == grok_photo[key]
 
 
+def test_qwen_applies_client_style_like_grok(monkeypatch, tmp_path):
+    # Parity: a client's style preference must steer the Qwen prompt exactly as it
+    # steers the Grok prompt, or the two providers aren't comparable.
+    captured = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        captured["text"] = body["messages"][1]["content"][0]["text"]
+        return httpx.Response(200, json={"choices": [{"message": {"content": _QWEN_CONTENT}}]}, request=request)
+
+    _mock_cloud_httpx(monkeypatch, handler)
+    vision.analyze_image(_img(tmp_path / "styled.jpg"), prefs={"style": "f_and_b"})
+    assert "food & beverage" in captured["text"].lower()
+
+
 def test_qwen_cost_is_zero_unit(monkeypatch, tmp_path):
     _mock_cloud_httpx(monkeypatch, _ok_handler())
     result, usage = cloud_vision._analyze_qwen(_img(tmp_path / "u.jpg"), model=None, prefs=None)
@@ -181,6 +196,27 @@ def test_qwen_http_error_recorded(monkeypatch, tmp_path):
     _mock_cloud_httpx(monkeypatch, handler)
     result = vision.analyze_image(_img(tmp_path / "h.jpg"))
     assert result.analysis_failed is True
+
+
+def test_qwen_non_json_body_recorded(monkeypatch, tmp_path):
+    # A 200 carrying a non-JSON HTTP body must still be recorded, not raised.
+    def handler(request):
+        return httpx.Response(200, text="<html>upstream proxy error</html>", request=request)
+
+    _mock_cloud_httpx(monkeypatch, handler)
+    result = vision.analyze_image(_img(tmp_path / "nj.jpg"))
+    assert result.analysis_failed is True
+
+
+def test_qwen_non_json_body_raises_cloudvision_error(monkeypatch, tmp_path):
+    # Helper-level contract: decode/parse failures surface as CloudVisionError
+    # (the type the SaaS handler catches), never a bare JSONDecodeError.
+    def handler(request):
+        return httpx.Response(200, text="<html>not json</html>", request=request)
+
+    _mock_cloud_httpx(monkeypatch, handler)
+    with pytest.raises(cloud_vision.CloudVisionError):
+        cloud_vision._analyze_qwen(_img(tmp_path / "nj2.jpg"), model=None, prefs=None)
 
 
 def test_qwen_unreachable_recorded(monkeypatch, tmp_path):

@@ -171,6 +171,11 @@ def _analyze_qwen(
     model_name = model or config.QWEN_VISION_MODEL
     b64 = _downsized_b64(image_path, max_side=config.QWEN_MAX_IMAGE_PX)
     user_prompt = vision.USER_PROMPT_TEMPLATE.format(max_tags=config.DEFAULT_MAX_TAGS)
+    # Apply the per-client style nudge exactly like the homelab Grok path, so a
+    # client's style preference steers both providers identically (comparable output).
+    style_suffix = vision.style_prompt_suffix(prefs)
+    if style_suffix:
+        user_prompt = f"{user_prompt}\n\n{style_suffix}"
     headers = {"Content-Type": "application/json"}
     if config.QWEN_API_KEY:
         headers["Authorization"] = f"Bearer {config.QWEN_API_KEY}"
@@ -235,11 +240,18 @@ def _post_json_vision(
         raise CloudVisionError(f"{provider} endpoint unreachable: {exc}") from exc
     if resp.status_code >= 400:
         raise CloudVisionError(f"{provider} HTTP {resp.status_code}: {resp.text[:400]}")
-    data = resp.json()
-    content = extract_content(data)
-    # Strict parse — a malformed/empty reply raises here, so a half-parsed result
-    # is never built or written.
-    parsed = _parse_vision_payload(content)
+    # Strict parse — a non-JSON HTTP body, missing content, or malformed/empty
+    # reply all surface as CloudVisionError (the documented provider-error type),
+    # so a half-parsed result is never built and the SaaS handler records it
+    # cleanly instead of leaking a raw JSONDecodeError.
+    try:
+        data = resp.json()
+        content = extract_content(data)
+        parsed = _parse_vision_payload(content)
+    except CloudVisionError:
+        raise
+    except Exception as exc:
+        raise CloudVisionError(f"{provider} invalid response: {exc}") from exc
     _, (width, height) = _prepare_b64(image_path)
     usage = {
         "provider": provider,
