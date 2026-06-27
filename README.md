@@ -25,6 +25,10 @@ unchanged. See [`docs/STRUCTURED-OUTPUT.md`](docs/STRUCTURED-OUTPUT.md).
 
 This is the shared vision/metadata layer for the Kevin Lee photography suite (Mise → Argus → Plutus).
 
+**Retiring Argus:** Mise now owns the authority (galleries, signals, status, review surface).
+Argus is narrowing to a stateless vision worker — see [`RETIRE.md`](RETIRE.md) for the
+statelessness audit, what's safe to turn off, and the exact `MISE_VISION_PROVIDER=argus` rollback.
+
 ## Quickstart (Phase 0 — local dogfood)
 
 ```bash
