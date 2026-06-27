@@ -49,6 +49,14 @@ DEFAULT_MAX_TAGS = int(os.environ.get("ARGUS_MAX_TAGS", "12"))
 _raw_backend = os.environ.get("ARGUS_VISION_BACKEND", "mock").lower()
 VISION_BACKEND = "grok" if _raw_backend == "real" else _raw_backend  # "real" alias for grok
 
+# Structured-output mode (Mise vision cutover) — OFF by default so the live Grok
+# export/callback path is byte-for-byte unchanged. When on, completed Mise-gallery
+# runs additionally emit the shared vision.schema.json shape + cost_usd/latency_ms
+# to Mise's /api/argus/callback so the validation gate can compare Argus vs Qwen.
+STRUCTURED_OUTPUT_ENABLED = os.environ.get("ARGUS_STRUCTURED_OUTPUT", "false").lower() == "true"
+# Provider label echoed in the structured payload so Mise can pair shadow rows.
+STRUCTURED_PROVIDER = os.environ.get("ARGUS_STRUCTURED_PROVIDER", "argus-grok").strip() or "argus-grok"
+
 # Phase 2 service settings
 SERVICE_MODE = os.environ.get("ARGUS_SERVICE_MODE", "standalone").lower()  # standalone | odysseus-style
 QUEUE_ENABLED = os.environ.get("ARGUS_QUEUE_ENABLED", "true").lower() == "true"

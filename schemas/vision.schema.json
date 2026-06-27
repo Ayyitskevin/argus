@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://kleephotography.com/schemas/vision.schema.json",
+  "title": "Mise vision worker output",
+  "description": "Shared per-photo vision contract emitted by Argus (Grok) and the Qwen3-VL challenger. Vendored copy of the schema Mise owns (docs/WORKER-CONTRACT.md). Paired shadow rows must differ only by provider, so both providers serialize to exactly this shape.",
+  "type": "object",
+  "required": ["photos"],
+  "additionalProperties": true,
+  "properties": {
+    "photos": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/photo" }
+    }
+  },
+  "$defs": {
+    "photo": {
+      "type": "object",
+      "required": ["basename", "keywords", "alt_text", "keeper_score", "hero_potential"],
+      "additionalProperties": false,
+      "properties": {
+        "basename": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Exact file name (no directory) — Mise matches this against gallery assets."
+        },
+        "keywords": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "alt_text": {
+          "type": ["string", "null"],
+          "description": "One-line alt text, or null when unavailable."
+        },
+        "keeper_score": {
+          "type": ["number", "null"],
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Overall keeper strength in [0,1], or null. Mise rejects out-of-range deterministically."
+        },
+        "hero_potential": {
+          "type": ["number", "null"],
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Hero / spread-anchor strength in [0,1], or null."
+        }
+      }
+    }
+  }
+}

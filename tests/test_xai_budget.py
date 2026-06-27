@@ -1,9 +1,7 @@
 """Homelab xAI daily budget guard."""
 
-import json
 import os
 import tempfile
-from datetime import date
 
 import pytest
 

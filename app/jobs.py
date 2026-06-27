@@ -179,6 +179,12 @@ def process_job(job: dict) -> None:
             mise_dedup.record_done(
                 gid, job.get("client_id"), int(result["run_id"]), folder_fingerprint=fp,
             )
+            service.maybe_emit_structured_callback(
+                mise_gallery_id=gid,
+                run_id=int(result["run_id"]),
+                correlation_id=job.get("correlation_id"),
+                tenant_id=job.get("tenant_id"),
+            )
             from . import plutus_client
 
             plutus_client.handoff_async(gid, int(result["run_id"]))

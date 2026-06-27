@@ -8,6 +8,12 @@ See [`docs/PHASE-0.md`](docs/PHASE-0.md) for the initial scope and what we're pr
 **Vision:** xAI Grok API only (`ARGUS_VISION_BACKEND=grok`). Mock for CI. No local qwen/Ollama.
 See [`docs/DOGFOOD-STANDARD.md`](docs/DOGFOOD-STANDARD.md). CI stays mock-only.
 
+**Structured-output mode (Mise vision cutover):** set `ARGUS_STRUCTURED_OUTPUT=true`
+to additionally emit the shared [`schemas/vision.schema.json`](schemas/vision.schema.json)
+shape + `cost_usd`/`latency_ms` to Mise's `/api/argus/callback` on Mise-gallery runs —
+apples-to-apples with the Qwen3-VL challenger. Off by default; the live Grok path is
+unchanged. See [`docs/STRUCTURED-OUTPUT.md`](docs/STRUCTURED-OUTPUT.md).
+
 **Studio mode (default):** homelab `:8010` vision for [Mise](https://github.com/Ayyitskevin/mise) gallery publish → [Plutus](https://github.com/Ayyitskevin/plutus) bundles. No Stripe, no SaaS signup.
 
 This is the shared vision/metadata layer for the Kevin Lee photography suite (Mise → Argus → Plutus).

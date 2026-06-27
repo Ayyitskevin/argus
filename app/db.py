@@ -227,6 +227,12 @@ def _apply_schema(con: sqlite3.Connection) -> None:
         ("tenants", "cost_cap_micro_usd", "INTEGER"),
         ("tenant_usage", "cost_micro_usd", "INTEGER NOT NULL DEFAULT 0"),
         ("mise_analyze_ledger", "folder_fingerprint", "TEXT"),
+        # Structured-output cost report (Mise vision cutover): per-image accounting
+        # summed per run for the /api/argus/callback ai_runs ledger.
+        ("photo_analyses", "cost_micro_usd", "INTEGER"),
+        ("photo_analyses", "latency_ms", "REAL"),
+        # Mise shadow-pair correlation id echoed back on the structured callback.
+        ("jobs", "correlation_id", "TEXT"),
     ]:
         try:
             con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {typ}")
@@ -328,8 +334,9 @@ def save_photo_analysis(run_id: int, data: dict) -> int:
         cur = con.execute(
             """INSERT INTO photo_analyses
                (run_id, image_path, width, height, shot_type, keywords, culling,
-                alt_text, description, suggested_iptc, raw_response)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                alt_text, description, suggested_iptc, raw_response,
+                cost_micro_usd, latency_ms)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 run_id,
                 data["image_path"],
@@ -342,6 +349,8 @@ def save_photo_analysis(run_id: int, data: dict) -> int:
                 data.get("description"),
                 json.dumps(data.get("suggested_iptc") or {}),
                 data.get("raw_response"),
+                _usd_to_micros(data.get("cost_usd")),
+                data.get("latency_ms"),
             ),
         )
         return int(cur.lastrowid)
@@ -522,14 +531,16 @@ def create_job(
     callback_url: str | None = None,
     recursive: bool = False,
     tenant_id: str | None = None,
+    correlation_id: str | None = None,
 ) -> str:
     job_id = str(uuid.uuid4())
     with tx() as con:
         con.execute(
             """INSERT INTO jobs
                (id, status, folder, limit_, write_sidecars, sidecar_dir,
-                project_id, source, model, client_id, callback_url, recursive, retry_count, tenant_id)
-               VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+                project_id, source, model, client_id, callback_url, recursive, retry_count,
+                tenant_id, correlation_id)
+               VALUES (?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
             (
                 job_id,
                 folder,
@@ -543,6 +554,7 @@ def create_job(
                 callback_url,
                 int(recursive),
                 tenant_id,
+                correlation_id,
             ),
         )
     return job_id

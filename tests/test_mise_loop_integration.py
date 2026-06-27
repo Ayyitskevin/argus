@@ -90,7 +90,7 @@ def _simulate_mise_writeback(export: dict, assets: list[dict]) -> dict:
 
 
 def test_export_contract_and_writeback_matching(monkeypatch, tmp_path):
-    gallery = _mise_gallery(tmp_path)
+    _mise_gallery(tmp_path)
     monkeypatch.setattr(config, "MISE_MEDIA_ROOT", tmp_path / "mise-media")
 
     result = service.perform_folder_analyze(

@@ -397,6 +397,7 @@ def analyze_folder_endpoint(
     recursive: bool = Form(False),
     callback_url: Optional[str] = Form(None),
     skip_dedup: bool = Form(False),
+    correlation_id: Optional[str] = Form(None),
     ctx: AuthContext = Depends(require_bearer),
 ):
     try:
@@ -425,6 +426,7 @@ def analyze_folder_endpoint(
             callback_url=callback_url,
             tenant=ctx.tenant,
             skip_dedup=skip_dedup,
+            correlation_id=correlation_id,
         )
     except service.AnalyzeError as exc:
         return error(exc.message, exc.status_code)
@@ -1255,6 +1257,34 @@ def export_run(run_id: int, ctx: AuthContext = Depends(require_bearer)):
     if not data:
         return error("run not found", 404)
     return data
+
+
+@app.get("/runs/{run_id}/structured", response_class=JSONResponse)
+def export_run_structured(
+    run_id: int,
+    gallery_id: Optional[int] = Query(None),
+    correlation_id: Optional[str] = Query(None),
+    ctx: AuthContext = Depends(require_bearer),
+):
+    """Schema-conforming (vision.schema.json) export for the Mise vision cutover.
+
+    Read-only and deterministic — the Mise dry-run preview at /admin/vision-cutover
+    and the validation gate pull this to compare Argus against the Qwen challenger.
+    With ?gallery_id=, returns the full /api/argus/callback body (adds run-level
+    cost_usd + latency_ms + echoed correlation_id); without it, just {photos:[...]}."""
+    from . import structured_output
+
+    data = get_full_run_for_ctx(run_id, ctx)
+    if not data:
+        return error("run not found", 404)
+    if gallery_id is not None:
+        return structured_output.build_callback_payload(
+            data,
+            gallery_id=int(gallery_id),
+            run_id=int(run_id),
+            correlation_id=correlation_id,
+        )
+    return structured_output.run_to_vision(data)
 
 
 @app.get("/runs/{run_id}/export.csv")
