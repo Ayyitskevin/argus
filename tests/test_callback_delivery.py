@@ -108,10 +108,10 @@ def test_exhausted_transient_dead_letters(monkeypatch):
 
 
 def test_hard_failure_no_retry_dead_letters(monkeypatch):
-    handler, calls = _seq([401])
+    handler, calls = _seq([403])  # non-401 hard 4xx — never retried, straight to dead-letter
     _mock(monkeypatch, handler)
     mise_client.argus_callback(7, dict(_PAYLOAD), background=False)
-    assert calls["n"] == 1  # 401 is a hard failure — not retried (PR3 adds re-auth)
+    assert calls["n"] == 1
     assert db.dead_letter_callback_count() == 1
 
 

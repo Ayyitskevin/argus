@@ -190,6 +190,38 @@ MISE_TIMEOUT = int(os.environ.get("ARGUS_MISE_TIMEOUT", "10"))
 MISE_CALLBACK_MAX_ATTEMPTS = max(1, int(os.environ.get("ARGUS_MISE_CALLBACK_MAX_ATTEMPTS", "3")))
 MISE_CALLBACK_BACKOFF_BASE = float(os.environ.get("ARGUS_MISE_CALLBACK_BACKOFF_BASE", "0.5"))
 
+
+def _read_env_file_value(key: str) -> str | None:
+    """Read a single key fresh from the on-disk .env (used for token-drift recovery
+    — picks up an operator edit that the running process hasn't reloaded yet)."""
+    env_path = _ROOT / ".env"
+    if not env_path.is_file():
+        return None
+    try:
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            name, _, value = line.partition("=")
+            if name.strip() == key:
+                return value.strip().strip('"').strip("'") or None
+    except OSError:
+        return None
+    return None
+
+
+def reload_mise_token() -> str:
+    """Re-read ARGUS_MISE_API_TOKEN for token-drift recovery on a 401.
+
+    Prefers the on-disk .env (an operator rotation not yet picked up by a restart),
+    then the process environment. Updates the module global in place and returns the
+    active token. If neither source has a value, the current token is left unchanged."""
+    global MISE_API_TOKEN
+    token = _read_env_file_value("ARGUS_MISE_API_TOKEN") or os.environ.get("ARGUS_MISE_API_TOKEN")
+    if token:
+        MISE_API_TOKEN = token
+    return MISE_API_TOKEN
+
 # Homelab: Plutus upsell hand-off after Mise gallery analyze (:8030).
 PLUTUS_URL = os.environ.get("ARGUS_PLUTUS_URL", "").rstrip("/")
 # Browser-facing review/pitch links (defaults to PLUTUS_URL when unset).

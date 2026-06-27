@@ -104,9 +104,23 @@ def _attempt_post(gallery_id: int, payload: dict[str, Any]) -> tuple[str, str | 
         return "delivered", str(code)
     if code in (404, 410):
         return "noop", str(code)
+    if code == 401:
+        return "auth", f"HTTP 401: {resp.text[:160]}"
     if code in _TRANSIENT_STATUS:
         return "transient", f"HTTP {code}: {resp.text[:160]}"
     return "hard", f"HTTP {code}: {resp.text[:160]}"
+
+
+def _reload_mise_token() -> bool:
+    """Re-read the Mise service token (token-drift recovery). Returns True only when
+    a different, non-empty token was loaded — i.e. a retry is worth attempting."""
+    old = config.MISE_API_TOKEN
+    new = config.reload_mise_token()
+    changed = bool(new) and new != old
+    if changed:
+        structured_log.event("callback.token_reloaded")
+        log.warning("reloaded rotated Mise service token after 401")
+    return changed
 
 
 def _dead_letter(gallery_id: int, payload: dict[str, Any], last_status: str | None, detail: str | None) -> None:
@@ -161,24 +175,17 @@ def _alert_dead_letter(gallery_id: int, key: str, last_status: str | None, detai
         log.warning("dead-letter alert webhook failed: %s", exc)
 
 
-def _deliver_with_retry(gallery_id: int, payload: dict[str, Any]) -> str:
-    """Deliver with exponential backoff on transient failures; dead-letter on
-    exhaustion or a hard failure. Returns the terminal outcome."""
+def _deliver_once(gallery_id: int, payload: dict[str, Any]) -> tuple[str, str | None]:
+    """One delivery, retrying transient failures with exponential backoff. Returns
+    the terminal (outcome, detail): delivered | noop | auth | hard | transient
+    (the last for exhausted transient retries)."""
     attempts = config.MISE_CALLBACK_MAX_ATTEMPTS
-    last_status: str | None = "transient"
-    last_detail: str | None = "no attempt made"
+    last: tuple[str, str | None] = ("transient", "no attempt made")
     for attempt in range(1, attempts + 1):
         outcome, detail = _attempt_post(gallery_id, payload)
-        if outcome == "delivered":
-            log.info("structured callback delivered for gallery %s run %s", gallery_id, payload.get("run_id"))
-            return "delivered"
-        if outcome == "noop":
-            log.info("structured callback no-op (stale subject %s) gallery %s", detail, gallery_id)
-            return "noop"
-        last_status, last_detail = outcome, detail
-        if outcome == "hard":
-            log.warning("structured callback hard failure gallery %s: %s", gallery_id, detail)
-            break
+        if outcome in ("delivered", "noop", "auth", "hard"):
+            return outcome, detail
+        last = (outcome, detail)  # transient
         if attempt < attempts:
             backoff = config.MISE_CALLBACK_BACKOFF_BASE * (2 ** (attempt - 1))
             log.warning(
@@ -186,7 +193,38 @@ def _deliver_with_retry(gallery_id: int, payload: dict[str, Any]) -> str:
                 gallery_id, attempt, attempts, detail, backoff,
             )
             time.sleep(backoff)
-    _dead_letter(gallery_id, payload, last_status, last_detail)
+    return last
+
+
+def _deliver_with_retry(gallery_id: int, payload: dict[str, Any]) -> str:
+    """Deliver durably. Transient failures retry with backoff; a 401 triggers a
+    single token-drift re-auth (reload the Mise token + retry once); anything still
+    unresolved is dead-lettered (never dropped). Returns the terminal outcome."""
+    outcome, detail = _deliver_once(gallery_id, payload)
+    if outcome == "delivered":
+        log.info("structured callback delivered for gallery %s run %s", gallery_id, payload.get("run_id"))
+        return "delivered"
+    if outcome == "noop":
+        log.info("structured callback no-op (stale subject %s) gallery %s", detail, gallery_id)
+        return "noop"
+
+    if outcome == "auth":
+        # The known 401 outage class: an in-memory token gone stale after a
+        # rotation. Reload from .env/env and retry ONCE; if the token did not
+        # change (or the retry still 401s), dead-letter + alert — never silent.
+        if _reload_mise_token():
+            outcome, detail = _deliver_once(gallery_id, payload)
+            if outcome == "delivered":
+                log.info("structured callback delivered after re-auth for gallery %s", gallery_id)
+                return "delivered"
+            if outcome == "noop":
+                return "noop"
+        else:
+            detail = f"{detail} (token unchanged after reload — check ARGUS_MISE_API_TOKEN)"
+        structured_log.event("callback.auth_failure", gallery_id=gallery_id, run_id=payload.get("run_id"))
+        log.error("structured callback auth failure gallery %s: %s", gallery_id, detail)
+
+    _dead_letter(gallery_id, payload, outcome, detail)
     return "dead_letter"
 
 
@@ -222,7 +260,12 @@ def redeliver_dead_letters(*, limit: int = 50) -> dict[str, int]:
     summary = {"attempted": 0, "delivered": 0, "still_failed": 0}
     if not is_enabled():
         return summary
-    for row in db.list_dead_letter_callbacks(limit=limit):
+    rows = db.list_dead_letter_callbacks(limit=limit)
+    if rows:
+        # Pick up a rotated token before re-POSTing, so a token-drift dead-letter
+        # self-heals on the next worker tick / redeliver call.
+        _reload_mise_token()
+    for row in rows:
         summary["attempted"] += 1
         try:
             payload = json.loads(row["payload"])

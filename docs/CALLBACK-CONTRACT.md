@@ -48,11 +48,25 @@ on the callback, so paired/shadow runs (e.g. Grok vs Qwen) link on Mise's side.
 before send, so Mise records an accurate last state and an Argus-side failure is
 recorded — never a silent gap and never a crash of Mise's publish path.
 
-## Auth
+## Auth + 401 re-auth  ✅ (implemented)
 
 Authenticated with the Mise service token (`ARGUS_MISE_API_TOKEN`,
 `Authorization: Bearer …`), attached only to the `MISE_URL`-derived callback —
 never to a tenant-supplied URL.
+
+The token is a first-class part of the contract and **self-heals token drift**
+(the known 401 outage class). On a `401`:
+
+1. **Reload** `ARGUS_MISE_API_TOKEN` — fresh from the on-disk `.env` (an operator
+   rotation the running process hasn't picked up yet), then the process env.
+2. If the token **changed**, retry the delivery **once** with it — a rotated token
+   recovers without a restart.
+3. If it didn't change (or the retry still `401`s), **dead-letter + alert** with a
+   clear `auth` status (`structured_log` `callback.auth_failure` + the operator
+   webhook) — a completed run is never silently dropped, and it's re-deliverable.
+
+Re-delivery (`/admin/callbacks/redeliver` + the worker tick) also reloads the
+token before re-POSTing, so a token-drift dead-letter self-heals on the next pass.
 
 ## Reliable delivery  ✅ (implemented)
 
@@ -74,10 +88,9 @@ a failed callback:
   makes re-delivery safe (Mise won't double-apply). `GET /admin/callbacks/dead-letters`
   lists what's pending (metadata only). Both require the admin token.
 
-## Roadmap (follow-up PR)
+## Status
 
-- **Auth robustness / 401 re-auth (PR 3):** on `401`, reload the Mise service
-  token from the environment/`.env` (the token-drift case) and retry once *before*
-  dead-lettering — turning the known 401 outage into a self-heal. Until then a
-  `401` is treated as a hard failure and dead-lettered (recorded + re-deliverable,
-  never silently dropped).
+All three hardening slices are merged: idempotency key + correlation + status
+(PR1), retry + dead-letter + re-delivery (PR2), and 401 re-auth + alerting (PR3).
+The contract invariant — *one stable result per (gallery, run), idempotent, never
+lost, never silently 401'd* — is now self-healing end to end.
