@@ -1085,6 +1085,31 @@ def compare_runs(
     return result
 
 
+@app.get(
+    "/runs/compare/providers",
+    response_class=JSONResponse,
+    tags=["runs"],
+    summary="Grok↔Qwen parity report between two runs of the same gallery",
+)
+def compare_provider_runs_endpoint(
+    request: Request,
+    a: int = Query(..., description="baseline run id (e.g. Grok)"),
+    b: int = Query(..., description="challenger run id (e.g. Qwen)"),
+):
+    """Measure the vision cutover: diff two runs' structured output, cost, and
+    latency so Mise's /admin/vision-cutover can decide if Qwen is close enough.
+    Read-only and deterministic — no model calls."""
+    from . import provider_compare
+
+    ctx = _request_auth(request)
+    scope = tenant_scope(ctx)
+    data_a = db.get_full_run(a, tenant_id=scope or db.GLOBAL_SCOPE)
+    data_b = db.get_full_run(b, tenant_id=scope or db.GLOBAL_SCOPE)
+    if not data_a or not data_b:
+        return error("one or both runs not found", 404)
+    return provider_compare.compare_provider_runs(data_a, data_b)
+
+
 @app.get("/runs/{run_id}", response_class=HTMLResponse)
 def view_run(run_id: int, request: Request):
     ctx = _request_auth(request)

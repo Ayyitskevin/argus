@@ -67,6 +67,40 @@ A provider failure on either path (HTTP error, timeout, unreachable endpoint, ma
 reply) is **swallowed and recorded as a failed analysis** — it never crashes the
 analyze/callback flow.
 
+## Measuring the cutover (parity harness)
+
+Before flipping `ARGUS_VISION_PROVIDER`, measure how close Qwen is to Grok on a
+real gallery — the move is meant to be *measured*, not blind.
+
+**Compare two existing runs** (e.g. a Mise Grok/Qwen shadow pair) — read-only, no
+model calls:
+
+```bash
+curl '.../runs/compare/providers?a=<grok_run_id>&b=<qwen_run_id>'
+python scripts/compare_providers.py --run-a <grok_run_id> --run-b <qwen_run_id>
+```
+
+**Run a folder through both providers live, then diff** (operator measurement —
+needs `XAI_API_KEY` for Grok and a reachable `ARGUS_QWEN_BASE_URL` for Qwen):
+
+```bash
+python scripts/compare_providers.py --folder /path/to/gallery --limit 20 --json report.json
+# --mock runs the harness end-to-end with no credits/endpoint (plumbing self-test)
+```
+
+The report (`app/provider_compare.py`, surfaced at `GET /runs/compare/providers`
+for Mise's `/admin/vision-cutover`) diffs the two runs on exactly the structured
+contract Mise validates:
+
+- per-provider **`cost_usd`** and **`latency_ms`** (and their deltas) — Grok cost
+  vs Qwen's `0`, and the speed trade-off;
+- **mean |keeper Δ|** / **mean |hero Δ|**, **keyword agreement** (Jaccard), and
+  **shot_type agreement** across photos matched by basename;
+- `only_in_a` / `only_in_b` (coverage gaps) and a per-photo table sorted by worst
+  keeper divergence;
+- a `verdict.within_tolerance` against tunable thresholds, with the reasons it
+  failed. The CLI exits `0` within tolerance, `2` when diverged.
+
 ## CI
 
 `tests/test_vision_provider_qwen.py` exercises the Qwen path with a **mocked**
