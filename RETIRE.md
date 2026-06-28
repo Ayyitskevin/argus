@@ -105,6 +105,13 @@ behavior with no Argus redeploy. Verify with the parity harness
 
 ## 7. Decommission phases
 
+> **Prerequisite (Mise side):** the decommission is gated on Mise consuming the
+> Argus contract (idempotent callback handler, cost/status ledger, the cutover flag
+> + parity gate, and owning client prefs). That work is specced in
+> [`docs/sibling-briefs/MISE-CONSUMER.md`](docs/sibling-briefs/MISE-CONSUMER.md) and
+> belongs in a Mise-scoped session. Phase C below cannot land until Mise supplies
+> client prefs per request.
+
 - **Phase A — this PR (no behavior change):** this audit + remove dead
   standalone-SaaS deploy/ops artifacts (`saas-bootstrap.sh`, `start-argus-saas.sh`,
   `fetch_saas_assets.py`, `wire-plutus-saas.sh`, `.env.saas.example`; the SaaS half
